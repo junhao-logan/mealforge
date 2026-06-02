@@ -10,7 +10,7 @@ from app.core.database import Base
 
 # Import all model modules here so that `target_metadata` sees every table
 # when running `alembic revision --autogenerate`. Add per domain as we go:
-# from app.users import models as _users_models  # noqa: F401
+from app.users import models as _users_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
