@@ -140,21 +140,21 @@ CREATE TABLE ingredients (
     name_normalized    VARCHAR(200) NOT NULL,         -- 全小写去空格,用于搜索
     category           VARCHAR(50),                    -- 'vegetable' / 'meat' / 'dairy' / 'grain' / 'oil' / ...
     
-    -- 营养（per 100g）
-    per_100g_calories  NUMERIC(6, 1) NOT NULL,
-    per_100g_protein   NUMERIC(5, 2) NOT NULL,
-    per_100g_carbs     NUMERIC(5, 2) NOT NULL,
-    per_100g_fat       NUMERIC(5, 2) NOT NULL,
-    per_100g_fiber     NUMERIC(5, 2),
+    -- 营养（per 100g）—— nullable: 0 ≠ unknown,USDA 偶有缺值,用 NULL 表达"无数据"
+    per_100g_calories  NUMERIC(6, 1),                  -- energy: seed 取值优先级 1008→2048→2047,单位锁 kcal
+    per_100g_protein   NUMERIC(5, 2),
+    per_100g_carbs     NUMERIC(5, 2),
+    per_100g_fat       NUMERIC(5, 2),
+    -- 未来扩展(糖/钠/饱和脂肪等)走 ADD COLUMN(nullable);长尾微量素再评估 JSONB
     
     -- UI 展示单位元数据(改良方案A的核心)
     default_unit       VARCHAR(20) NOT NULL DEFAULT 'g',  -- 'g' / 'ml' / '个' / '勺' / '杯'
-    grams_per_unit     NUMERIC(7, 2) NOT NULL DEFAULT 1.0, -- 1 个该单位 = ? 克
+    grams_per_unit     NUMERIC(7, 2) NOT NULL DEFAULT 1.0, -- 1 个该单位 = ? 克;多单位等 Phase 2 unit_options 表
     
     -- 保质期与来源
     shelf_life_days    INT,                            -- 标准保质期(天),用户库存条目可覆盖
     source             VARCHAR(20) NOT NULL DEFAULT 'user',  -- 'usda' / 'system' / 'user'
-    usda_fdc_id        VARCHAR(20),                    -- USDA FoodData Central ID
+    usda_fdc_id        VARCHAR(20),                    -- USDA FoodData Central ID; seed 的 upsert key
     created_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
     
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -169,8 +169,11 @@ CREATE UNIQUE INDEX idx_ingredients_usda_fdc_id ON ingredients(usda_fdc_id) WHER
 
 **关键设计**：
 
+- **营养字段 nullable**：`0`（确实不含）与"无数据/未导入"语义不同,用 NULL 表达未知,前端显示 "—" 而非 "0"(避免给控钠/控糖用户错误信息)。MVP 锁四宏量(kcal/protein/fat/carbs);糖/钠等未来走 `ADD COLUMN`(nullable),长尾微量素再评估 JSONB——区分高频可计算字段与长尾展示字段,不过早抽象
+- **energy 取值确定性规则**:USDA 一条食材可能有多行 energy(SR Legacy 多用 `1008`;Foundation Foods 常见 Atwater `2047`/`2048`)。seed 按 `1008 → 2048 → 2047` 优先级取一个,单位强制 kcal(忽略 kJ 行 `1062`),保证跨数据集一致
 - `name_normalized` 用于模糊搜索（"番茄" vs "西红柿" 需要别名时未来加 `IngredientAlias` 表）
 - `source='usda'` 全局共享，`source='user'` 私有（由 `created_by_user_id` 标识所有者）
+- `usda_fdc_id` 作幂等 seed 的 upsert key(`ON CONFLICT ... DO UPDATE`);partial unique index 允许多个用户自定义食材并存(均为 NULL)
 - 用户在 UI 输入"2 个鸡蛋"→ 后端换算 `2 * grams_per_unit (50) = 100g` 存入 `RecipeIngredient.quantity_grams`
 
 ---
@@ -834,4 +837,4 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 
 ---
 
-*Last updated: 2026-05-19 — Week 1, ER 设计阶段（v1.1：加入 recipe_variant_tags 表 + rating 改 1-10 主观评分）*
+*Last updated: 2026-06-13 — Week 2, ingredients 表对齐 D1–D4（营养四宏量改 nullable、删 fiber、energy 取值规则入档）*
