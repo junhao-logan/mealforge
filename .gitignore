@@ -56,4 +56,4 @@ docker-volumes/
 
 # Project specific
 *.sqlite
-*.db
+*.dbapp/ingredients/seed_data/usda/
