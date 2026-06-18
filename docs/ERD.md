@@ -85,7 +85,8 @@ CREATE TABLE users (
     display_name    VARCHAR(100),
     
     -- 认证由 Clerk/Supabase 处理，这里只存外部 ID
-    auth_provider_id VARCHAR(255) NOT NULL UNIQUE,
+    clerk_user_id VARCHAR(255) NOT NULL UNIQUE,
+
     
     -- 用户基础信息（用于 TDEE 计算）
     height_cm       NUMERIC(5, 2),
@@ -110,7 +111,7 @@ CREATE INDEX idx_users_auth_provider_id ON users(auth_provider_id);
 ```sql
 CREATE TABLE user_nutrition_goals (
     id                 BIGSERIAL PRIMARY KEY,
-    user_id            BIGINT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    user_id            UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     
     goal_type          VARCHAR(20) NOT NULL,  -- 'fat_loss' / 'muscle_gain' / 'maintenance'
     
@@ -174,7 +175,7 @@ CREATE UNIQUE INDEX idx_ingredients_usda_fdc_id ON ingredients(usda_fdc_id) WHER
 - `name_normalized` 用于模糊搜索（"番茄" vs "西红柿" 需要别名时未来加 `IngredientAlias` 表）
 - `source='usda'` 全局共享，`source='user'` 私有（由 `created_by_user_id` 标识所有者）
 - `usda_fdc_id` 作幂等 seed 的 upsert key(`ON CONFLICT ... DO UPDATE`);partial unique index 允许多个用户自定义食材并存(均为 NULL)
-- 用户在 UI 输入"2 个鸡蛋"→ 后端换算 `2 * grams_per_unit (50) = 100g` 存入 `RecipeIngredient.quantity_grams`
+- 用户在 UI 输入"2 个鸡蛋"→ 后端换算存入 quantity_grams + 同时保留 input_amount/input_unit(D5=B)
 
 ---
 
@@ -234,7 +235,9 @@ CREATE TABLE recipe_variants (
     total_fat_g              NUMERIC(6, 2),
     total_grams              NUMERIC(8, 2),
     nutrition_computed_at    TIMESTAMPTZ,
-    
+    input_amount  NUMERIC(8, 2) NOT NULL,   -- 用户原始输入数量(D5=B, 显示用)
+    input_unit    VARCHAR(20) NOT NULL,     -- 用户原始单位('g' 或食材 default_unit)
+
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

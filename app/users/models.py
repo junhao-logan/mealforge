@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, func, text
 from sqlalchemy import Boolean, DateTime, String, func, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -31,3 +33,9 @@ class User(Base):
         DateTime(timezone=True), nullable=False,
         server_default=func.now(), onupdate=func.now(),
     )
+
+    height_cm: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    weight_kg: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    age: Mapped[int | None] = mapped_column(Integer)
+    biological_sex: Mapped[str | None] = mapped_column(String(10))      # male/female/other
+    activity_level: Mapped[str | None] = mapped_column(String(20))      # sedentary/light/moderate/active/very_active

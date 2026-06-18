@@ -13,6 +13,7 @@ from app.core.database import Base
 from app.users import models as _users_models  # noqa: F401
 from app.ingredients import models as _ingredients_models  # noqa: F401
 from app.recipes import models as _recipes_models  # noqa: F401
+from app.nutrition import models as _nutrition_models  # noqa: F401
 
 
 config = context.config
