@@ -6,8 +6,7 @@ Built end-to-end as a learning project to explore modern full-stack development 
 
 ## Status
 
-🚧 In active development (Week 1 of 12)
-
+🚧 In active development (Week 4 of 12 — Phase 1 MVP backend complete)
 ## Vision
 
 Most fitness apps stop at calorie tracking. MealForge goes further:
@@ -28,7 +27,7 @@ Most fitness apps stop at calorie tracking. MealForge goes further:
 ## Roadmap
 
 - [x] Week 1: Project setup, ER diagram, FastAPI skeleton
-- [ ] Week 2-4: Core MVP (recipes, ingredients, meal planning)
+- [x] Week 2-4: Core MVP (recipes, ingredients, meal planning)
 - [ ] Week 5-6: Inventory tracking and shopping lists
 - [ ] Week 7-8: AI recipe and meal plan generation
 - [ ] Week 9-10: Testing, performance, UI polish
