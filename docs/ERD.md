@@ -322,7 +322,7 @@ CREATE INDEX idx_recipe_ingredients_ingredient_id ON recipe_ingredients(ingredie
 ```sql
 CREATE TABLE meal_plans (
     id                       BIGSERIAL PRIMARY KEY,
-    user_id                  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id                  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     
     name                     VARCHAR(100),                 -- '10月减脂周' / NULL(自动命名)
     start_date               DATE NOT NULL,
