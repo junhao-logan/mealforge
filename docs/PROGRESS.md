@@ -354,6 +354,9 @@
 - [ ] `docs/AI_PROMPTS.md` — AI prompt 设计与版本
 - [ ] `docs/DEPLOYMENT.md` — 部署文档
 - [ ] `README.md` — 项目主页（待补 v1 内容）
+- [x] `docs/CHANGELOG.md` — 各 chat 详细总结归档
+- [x] `docs/FRONTEND_MILESTONE.md` — Clerk 前端骨架里程碑任务书
+- [x] `docs/MealForge_Project_Brief.md` — 项目总纲
 
 ---
 
