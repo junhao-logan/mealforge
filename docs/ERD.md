@@ -67,8 +67,7 @@ erDiagram
 
 ### Conventions
 
-- 所有主键：`BIGSERIAL PRIMARY KEY`（自增 64 位整数）
-- 所有表都有 `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
+- 所有主键：`BIGSERIAL PRIMARY KEY`（自增 64 位整数）；例外：`users.id` 用 `UUID`（gen_random_uuid()），对齐 Clerk 外部身份、避免连续 ID 被枚举猜测- 所有表都有 `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
 - 用户相关表都有 `updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`，由触发器或 ORM 维护
 - 软删除：MVP 不做，删除即物理删除（除非有审计需求）
 - 时间字段全部 `TIMESTAMPTZ`（带时区），不用 `TIMESTAMP`
@@ -80,24 +79,23 @@ erDiagram
 
 ```sql
 CREATE TABLE users (
-    id              BIGSERIAL PRIMARY KEY,
-    email           VARCHAR(255) NOT NULL UNIQUE,
-    display_name    VARCHAR(100),
-    
-    -- 认证由 Clerk/Supabase 处理，这里只存外部 ID
-    clerk_user_id VARCHAR(255) NOT NULL UNIQUE,
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- PG16 内置，无需 extension
+    clerk_user_id   VARCHAR(255) NOT NULL UNIQUE,                -- Clerk 身份影子键
+    email           VARCHAR(320),                               -- 可空：Clerk token 未必带 email claim
+    display_name    VARCHAR(255),
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
 
-    
     -- 用户基础信息（用于 TDEE 计算）
     height_cm       NUMERIC(5, 2),
     weight_kg       NUMERIC(5, 2),
     age             INT,
     biological_sex  VARCHAR(10),         -- 'male' / 'female' / 'other'
     activity_level  VARCHAR(20),         -- 'sedentary' / 'light' / 'moderate' / 'active' / 'very_active'
-    
+
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- clerk_user_id 的 UNIQUE 约束已隐含索引，无需再单独建 index
 
 CREATE INDEX idx_users_auth_provider_id ON users(auth_provider_id);
 ```
@@ -235,8 +233,7 @@ CREATE TABLE recipe_variants (
     total_fat_g              NUMERIC(6, 2),
     total_grams              NUMERIC(8, 2),
     nutrition_computed_at    TIMESTAMPTZ,
-    input_amount  NUMERIC(8, 2) NOT NULL,   -- 用户原始输入数量(D5=B, 显示用)
-    input_unit    VARCHAR(20) NOT NULL,     -- 用户原始单位('g' 或食材 default_unit)
+
 
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -293,14 +290,11 @@ CREATE TABLE recipe_ingredients (
     id                       BIGSERIAL PRIMARY KEY,
     recipe_variant_id        BIGINT NOT NULL REFERENCES recipe_variants(id) ON DELETE CASCADE,
     ingredient_id            BIGINT NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
-    
-    quantity_grams           NUMERIC(8, 2) NOT NULL,
-    display_quantity         NUMERIC(7, 2),         -- 用户填的原始数量(展示用)
-    display_unit             VARCHAR(20),           -- 用户填的原始单位(展示用)
-    
-    notes                    VARCHAR(200),          -- '切丁' / '去皮'
-    sort_order               INT NOT NULL DEFAULT 0,
-    
+
+    quantity_grams           NUMERIC(8, 2) NOT NULL,   -- 计算唯一来源（D5=B 归一化克数）
+    input_amount             NUMERIC(8, 2) NOT NULL,   -- 用户原始输入数量（D5=B，展示/还原用）
+    input_unit               VARCHAR(20)   NOT NULL,   -- 用户原始单位（'g' 或食材 default_unit）
+
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
