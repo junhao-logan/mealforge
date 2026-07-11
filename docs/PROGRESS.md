@@ -12,15 +12,12 @@
 - **上次更新**：2026-06-19
 - **下一步**：Clerk 前端骨架里程碑（见 docs/FRONTEND_MILESTONE.md）—— 打通登录+真 token，一次性真测积压的认证端点（/users/me + 营养目标 4 个 + 计划全家桶）
 
-### Week 2 进度 —— 完成 ✅
-
-- ✅ D1–D4 食材层设计决策
-- ✅ Ingredient 模型 + migration（153bf345acc5）
-- ✅ USDA seed 脚本（S1–S4，15 条入库，幂等验证）
-- ✅ GET /ingredients（分页 + name 过滤）
-- ✅ D5/D6/D7 菜谱层决策
-- ✅ Recipe/RecipeVariant/RecipeIngredient 模型 + migration（64c868f9d733，三表落库）
-- ✅ Recipe CRUD（POST 嵌套创建 + GET 列表/详情）+ D5 克数换算 service + D6 营养聚合 service
+**Clerk 前端骨架里程碑：完成 ✅**
+- Vite + React 骨架 + Clerk 登录闭环跑通
+- 所有认证端点用真 JWT 端到端验证（/users/me + 营养目标 4 个），全 200
+- JIT identity-shadow 建行 + 幂等确认；email claim 透传落库确认
+- CORS（双 origin）、azp（双 origin，否定测试通过）
+- 下一步：Week 5+ —— MealPlan logs / AI 推荐 / 库存层
 
 ### 项目基础信息
 
@@ -343,6 +340,30 @@
 - 每日营养汇总已补（Week 3 挪来的债还清）
 - ERD 其余表 user_id 草图仍 BIGINT（inventory/shopping/notes/meal_logs），做到那周再校准
 
+## Chat 13 — Clerk 前端骨架里程碑（完成）
+
+**目标**：搭最小 React 前端，打通 Clerk 登录 → 拿真 JWT → 砸后端认证端点，
+一次性真测积压的所有认证接口（此前只有 mock/curl 验证）。
+
+**做了什么**
+- 前端脚手架：Vite + React（纯 JS，非 TS——一次性骨架，正式前端 Week 10 再上分层 + TS）。
+- 接 Clerk React SDK v5：`<ClerkProvider>` 包根、`.env.local` 存 publishable key
+  （`VITE_` 前缀经 `import.meta.env` 注入）、`<SignedIn>/<SignedOut>/<SignInButton>/<UserButton>`。
+- 后端 CORS：新增 `cors_allowed_origins_raw`（逗号分隔 property，复用 azp 同款模式），
+  允许 `http://127.0.0.1:5173` + `http://localhost:5173` 双 origin。
+- 启用 azp：`.env` 填 `CLERK_AUTHORIZED_PARTIES_RAW`（双 origin），否定测试确认能拦（错误 azp → 401）。
+
+**端到端验证（全绿）**
+- `GET /users/me` → 200，JIT 首次建 identity-shadow 行（sub→UUID，email claim 透传落库），
+  二次调用 count 仍为 1（幂等确认）。
+- 营养目标全链路：`PUT body-metrics`(200) → `POST compute`(200, TDEE≈2594 kcal maintenance)
+  → `GET`(200 读回一致) → `PUT override`(200, upsert 覆盖为 2200, is_custom)。
+- 真 token 解码核对：`iss=https://literate-koala-34.clerk.accounts.dev`（对上后端），
+  `email` claim 存在（透传闭环），`exp-iat=60s`（轮换）。
+
+**踩过的坑（简历素材）**
+- `localhost` ≠ `127.0.0.1`：origin 层面不同，同时咬 CORS 允许列表和 Clerk azp——两处须与浏览器地址栏一致。统一改用 `localhost`。
+- "假 CORS"：后端 500（DB 未起，asyncpg ConnectionRefused）时无法附加 CORS
 ---
 
 ## 📚 相关文档索引
