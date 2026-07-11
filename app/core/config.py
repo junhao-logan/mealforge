@@ -24,11 +24,11 @@ class Settings(BaseSettings):
 
     @property
     def clerk_authorized_parties(self) -> list[str]:
-        return [p.strip() for p in self.clerk_authorized_parties_raw.split(",") if p.strip()]、
+        return [p.strip() for p in self.clerk_authorized_parties_raw.split(",") if p.strip()]
 
-        
+
     # --- CORS ---
-    cors_allowed_origins_raw: str = "http://127.0.0.1:5173"  # 逗号分隔，dev 默认本机前端
+    cors_allowed_origins_raw: str = "http://127.0.0.1:5173,http://localhost:5173"
 
     @property
     def cors_allowed_origins(self) -> list[str]:
