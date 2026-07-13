@@ -12,12 +12,11 @@
 - **上次更新**：2026-06-19
 - **下一步**：Clerk 前端骨架里程碑（见 docs/FRONTEND_MILESTONE.md）—— 打通登录+真 token，一次性真测积压的认证端点（/users/me + 营养目标 4 个 + 计划全家桶）
 
-**Clerk 前端骨架里程碑：完成 ✅**
-- Vite + React 骨架 + Clerk 登录闭环跑通
-- 所有认证端点用真 JWT 端到端验证（/users/me + 营养目标 4 个），全 200
-- JIT identity-shadow 建行 + 幂等确认；email claim 透传落库确认
-- CORS（双 origin）、azp（双 origin，否定测试通过）
-- 下一步：Week 5+ —— MealPlan logs / AI 推荐 / 库存层
+### Week 5 — 库存管理（决策已定，待实现）
+- 决策 I1–I10 锁定（详见 CHANGELOG）
+- Week 5 实现范围：inventory_items + inventory_transactions 建表/migration、
+  user_id UUID 校准、库存 CRUD、FEFO 扣减挂 MealPlanEntry.complete、临期提醒、克本位
+- I6–I10（预扣视图/缺口函数/采购）实现推迟到 Week 6
 
 ### 项目基础信息
 
