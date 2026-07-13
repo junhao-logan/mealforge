@@ -40,3 +40,16 @@ I10 采购项属性（Week6）
     · add_to_inventory 开关（厨房纸=false）; 与 source 正交
     · 添加物品选择界面：选已有食材 / 创建新食材(填营养) / 创建非食材(纯文本)
 ════════════════════════════════════════════════
+I11 — 用户自建内容(ingredient / recipe / variant)
+─────────────────────────────────────────────
+【Week 6 实现:私有创建】
+· created_by_user_id: BigInteger → 改 UUID + FK→users.id
+  (清 Week 2 埋的"类型对不上"债)
+· 可见性字段 visibility: 'private'(默认) / 'global'
+· 查询过滤:用户只见 自己私有的 + visibility='global' 的
+· ingredients 已有 source='user' 复用;recipe/variant 同加 created_by + visibility
+
+【愿景,暂不实现(记录设计意图)】
+· 申请转全局:private → pending_review → global/rejected 状态机
+· 审核工作流:审核者角色、审核队列、批准/驳回(附理由)
+· 判断:UGC 治理属平台成熟期功能,MVP 不做,预留字段/路径即可
