@@ -15,6 +15,8 @@ from app.ingredients import models as _ingredients_models  # noqa: F401
 from app.recipes import models as _recipes_models  # noqa: F401
 from app.nutrition import models as _nutrition_models  # noqa: F401
 from app.meal_plans import models as _meal_plans_models  # noqa: F401
+from app.inventory import models as _inventory_models  # noqa: F401   # ← 加这行
+
 
 
 config = context.config
