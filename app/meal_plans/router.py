@@ -17,10 +17,13 @@ from app.meal_plans.schemas import (
 from app.meal_plans.services import meal_type_sort_key
 
 from app.nutrition.models import UserNutritionGoal
-from app.meal_plans.schemas import QuickLogCreate, DailySummaryRead  # 待建, 见下
+from app.meal_plans.schemas import QuickLogCreate, DailySummaryRead, EntryCompleteRead, ShortfallItem
 from app.meal_plans.services import (
     get_or_create_default_plan, expand_plan_range, meal_type_sort_key,  # meal_type_sort_key 已import则不重复
 )
+from app.inventory import services as inventory_services
+from datetime import date, datetime, timezone
+from decimal import Decimal
 router = APIRouter(prefix="/meal-plans", tags=["meal-plans"])
 
 
@@ -44,7 +47,15 @@ def _sorted_entries(plan: MealPlan) -> list[MealPlanEntry]:
         plan.entries,
         key=lambda e: (e.scheduled_date, meal_type_sort_key(e.meal_type), e.sort_order),
     )
-
+async def _get_owned_entry(
+    db: AsyncSession, plan_id: int, entry_id: int, user: User
+) -> MealPlanEntry:
+    """取 entry 并校验归属(经 plan 关联 user)。"""
+    plan = await _get_owned_plan(db, plan_id, user)
+    entry = await db.get(MealPlanEntry, entry_id)
+    if entry is None or entry.meal_plan_id != plan.id:
+        raise HTTPException(404, f"餐次 id={entry_id} 不存在")
+    return entry
 
 # ---------- 计划 CRUD ----------
 
@@ -170,24 +181,40 @@ async def delete_entry(
     await db.commit()
 
 
-@router.patch("/{plan_id}/entries/{entry_id}/complete", response_model=MealPlanEntryRead)
+@router.patch("/{plan_id}/entries/{entry_id}/complete", response_model=EntryCompleteRead)
 async def complete_entry(
     plan_id: int,
     entry_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> MealPlanEntry:
-    from datetime import datetime, timezone
-    plan = await _get_owned_plan(db, plan_id, user)
-    entry = await db.get(MealPlanEntry, entry_id)
-    if entry is None or entry.meal_plan_id != plan.id:
-        raise HTTPException(404, f"餐次 id={entry_id} 不存在")
+) -> EntryCompleteRead:
+    """标记完成 + 按 FEFO 扣减库存(同事务)。
+    库存不足不阻止完成(I1/决策①): 短缺只作为信息返回。
+    """
+    entry = await _get_owned_entry(db, plan_id, entry_id, user)
+
+
+
+    # 幂等: 已完成则不重复扣减
+    if entry.is_completed:
+        return EntryCompleteRead(
+            entry=MealPlanEntryRead.model_validate(entry),
+            shortfalls=[],
+        )
+
     entry.is_completed = True
     entry.completed_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(entry)
-    return entry
 
+    # 扣减库存(不 commit, 与上面的完成标记同事务)
+    shortfalls = await inventory_services.deduct_for_entry(db, user.id, entry)
+
+    await db.commit()        # ← 完成标记 + 库存扣减 + 流水, 一起生效
+    await db.refresh(entry)
+
+    return EntryCompleteRead(
+        entry=MealPlanEntryRead.model_validate(entry),
+        shortfalls=[ShortfallItem(**s) for s in shortfalls],
+    )
 # ---------- 快捷记录(记录型用户, 无感 default plan) ----------
 
 @router.post("/quick-log", response_model=MealPlanEntryRead, status_code=201)
