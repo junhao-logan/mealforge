@@ -92,3 +92,14 @@ class DailySummaryRead(BaseModel):
     carbs_g: MacroSummary
     fat_g: MacroSummary
     has_goal: bool                 # 用户是否设了营养目标
+
+class ShortfallItem(BaseModel):
+    """完成餐次时某食材的短缺(库存不足部分)。"""
+    ingredient_id: int
+    shortfall_grams: Decimal
+
+
+class EntryCompleteRead(BaseModel):
+    """完成餐次的响应: entry + 本次扣减产生的短缺(I1: 短缺另记,不写回库存)。"""
+    entry: MealPlanEntryRead
+    shortfalls: list[ShortfallItem]
