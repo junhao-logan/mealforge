@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins_raw.split(",") if o.strip()]
+
+    
+    # --- Inventory ---
+    inventory_expiry_warning_days: int = 3  # 距过期 ≤N 天标记为临期(黄色, I4)
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]

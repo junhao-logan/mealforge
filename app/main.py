@@ -8,6 +8,7 @@ from app.ingredients.router import router as ingredients_router
 from app.recipes.router import router as recipes_router
 from app.nutrition.router import router as nutrition_router
 from app.meal_plans.router import router as meal_plans_router
+from app.inventory.router import router as inventory_router
 
 settings = get_settings()
 
@@ -27,6 +28,7 @@ app.include_router(ingredients_router)
 app.include_router(recipes_router)
 app.include_router(nutrition_router)
 app.include_router(meal_plans_router)
+app.include_router(inventory_router)
 
 
 @app.get("/")
