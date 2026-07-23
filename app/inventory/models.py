@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -65,6 +66,8 @@ class InventoryItem(Base):
             "idx_inventory_items_user_ingredient_expires",
             "user_id", "ingredient_id", "expires_at",
         ),
+        # 不变量: 库存恒非负(I1)。应用层 FEFO 的 min() 已保证, 这里在 DB 层固化兜底
+        CheckConstraint("quantity_grams >= 0", name="qty_non_negative"),
     )
 
 
