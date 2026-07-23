@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.inventory.models import InventoryItem, InventoryTransaction
-from app.inventory.schemas import InventoryItemCreate
+from app.inventory.schemas import InventoryItemCreate, InventoryItemUpdate
 from datetime import date, timedelta
 from decimal import Decimal
 from app.recipes.models import RecipeIngredient
@@ -137,3 +137,26 @@ async def deduct_for_entry(
 
     await db.flush()
     return shortfalls
+
+async def get_owned_item(db: AsyncSession, user_id, item_id: int) -> InventoryItem | None:
+    """取批次并校验归属。不是自己的 → None(router 转 404, 不泄漏存在性)。"""
+    item = await db.get(InventoryItem, item_id)
+    if item is None or item.user_id != user_id:
+        return None
+    return item
+
+
+async def update_inventory_item(
+    db: AsyncSession, item: InventoryItem, data: InventoryItemUpdate
+) -> InventoryItem:
+    """盘点修正: 只改当前余量与日期。input_amount/unit 是入库时的原始记录, 不改。
+    不记流水(I2 补充: 人工调整非消耗事件)。
+    """
+    if data.quantity_grams is not None:
+        item.quantity_grams = data.quantity_grams   # 只改余量
+    if data.purchased_at is not None:
+        item.purchased_at = data.purchased_at
+    if data.expires_at is not None:
+        item.expires_at = data.expires_at
+    await db.flush()
+    return item

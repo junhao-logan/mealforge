@@ -18,9 +18,10 @@ class InventoryItemCreate(BaseModel):
 
 
 class InventoryItemUpdate(BaseModel):
-    """改批次。全部可选,只改传入的字段。"""
-    input_amount: Decimal | None = Field(default=None, gt=0)
-    input_unit: str | None = Field(default=None, max_length=20)
+    """盘点修正批次。改的是当前余量(quantity_grams), 不动入库历史(input_amount/unit)。
+    全部可选, 只改传入的字段。
+    """
+    quantity_grams: Decimal | None = Field(default=None, ge=0)  # ge=0: 盘点可为 0(吃完了)
     purchased_at: date | None = None
     expires_at: date | None = None
 

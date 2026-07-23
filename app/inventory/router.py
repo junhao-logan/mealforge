@@ -1,7 +1,7 @@
 # app/inventory/router.py
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends,HTTPException
 
 from datetime import date
 
@@ -9,7 +9,7 @@ from app.auth.dependencies import get_current_user
 from app.core.database import get_db
 from app.users.models import User
 from app.inventory import services
-from app.inventory.schemas import InventoryItemCreate, InventoryItemRead
+from app.inventory.schemas import InventoryItemCreate, InventoryItemRead, InventoryItemUpdate
 from app.core.config import get_settings
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,3 +49,36 @@ async def list_inventory(
         )
         for item in items
     ]
+
+
+@router.patch("/{item_id}", response_model=InventoryItemRead)
+async def update_inventory_item(
+    item_id: int,
+    payload: InventoryItemUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> InventoryItemRead:
+    """手动修正批次(改量/补填过期日)。不记流水。"""
+    item = await services.get_owned_item(db, user.id, item_id)
+    if item is None:
+        raise HTTPException(404, f"库存批次 id={item_id} 不存在")
+
+    item = await services.update_inventory_item(db, item, payload)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+@router.delete("/{item_id}", status_code=204)
+async def delete_inventory_item(
+    item_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """删批次(录错/扔了一律直接删, 不记流水)。"""
+    item = await services.get_owned_item(db, user.id, item_id)
+    if item is None:
+        raise HTTPException(404, f"库存批次 id={item_id} 不存在")
+
+    await db.delete(item)
+    await db.commit()
