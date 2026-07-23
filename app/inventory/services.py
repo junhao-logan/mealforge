@@ -66,6 +66,7 @@ async def list_inventory_items(db: AsyncSession, user_id) -> list[InventoryItem]
         .order_by(
             InventoryItem.expires_at.asc().nulls_last(),
             InventoryItem.purchased_at.asc().nulls_last(),
+            InventoryItem.id.asc(),      
         )
     )
     return list((await db.execute(stmt)).scalars().all())
@@ -103,6 +104,7 @@ async def deduct_for_entry(
             .order_by(
                 InventoryItem.expires_at.asc().nulls_last(),
                 InventoryItem.purchased_at.asc().nulls_last(),
+                InventoryItem.id.asc(), 
             )
             .with_for_update()   # 行锁: 防并发完成餐次时重复扣同一批次
         )
