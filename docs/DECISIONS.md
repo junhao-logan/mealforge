@@ -2,7 +2,7 @@
 
 > 本文件是所有架构决策的**唯一记录处**（single source of truth）。
 > 记录内容：决策本身、理由、备选方案，以及后续实现中的**修订**。
-> 决策编号：`D` = 环境与架构（Week 1-4），`I` = 库存与采购（Week 5+）。
+> 决策编号：`D` = 环境与架构（Week 1-4，含 D/N/P 系列），`I` = 库存与采购（Week 5+）。
 > 设计在实现中演进是正常的 —— 修订会保留原条目并标注，不做无痕修改。
 
 ## 目录
@@ -10,11 +10,15 @@
 - [D 系列 — 环境与架构决策（Week 1-4）](#d-系列--环境与架构决策week-1-4)
 - [修订记录](#修订记录)
 - [I 系列 — 库存与采购决策（Week 5+）](#i-系列--库存与采购决策week-5)
-- [待办技术债](#待办技术债)
+- [技术债](#技术债)
+- [流程笔记](#流程笔记)
 
 ---
 
 ## D 系列 — 环境与架构决策（Week 1-4）
+
+> 共 57 条，按日期排列。含 D1-D7（数据模型）、N1-N4（营养）、P1-P4（餐食计划）等编号决策。
+> 其中 5 条已在 Week 5 实现时修订，见下节。
 
 | 日期 | 决策 | 理由 | 备选方案 |
 | --- | --- | --- | --- |
@@ -95,15 +99,24 @@
 `inventory_transactions` 纯审计。因此流水可设 90 天保留期而不影响库存正确性 ——
 纯事件溯源无法随意截断历史（截断即算错当前值）。
 
-**3. "`quantity_grams` CHECK ≥ 0" → 建表时遗漏，待补**
+**3. "`quantity_grams` CHECK ≥ 0" → 建表时遗漏，已补 ✅**
 
-当前非负性仅由应用层 FEFO 的 `min()` 保证。DB 层 CHECK 作为不变量兜底待补（见待办技术债）。
+2026-07-23 补上，约束名 `ck_inventory_items_qty_non_negative`（migration `7ce8329404eb`）。
+非负性现有**双层保护**：应用层 FEFO 的 `min()` + DB 层 CHECK 兜底。
+面试点：关键不变量应在 DB 层用约束固化，不只依赖应用层逻辑。
 
-**4. "`inventory_transactions` 双时间戳（occurred_at + created_at）" → 仅实现 occurred_at**
+**4. "`inventory_transactions` 双时间戳（occurred_at + created_at）" → 建表时只做了 occurred_at，已补 ✅**
 
-实际建表只有 `occurred_at`（`server_default=now()`），等价于 created_at。
-后果：用户事后补录（"我中午做的饭刚想起来记"）时无法区分"事件发生时间"与"记录写入时间"，
-时间点回放会错位。待补（见待办技术债）。
+2026-07-23 补上 `created_at`（migration `e43bb8446f56`）。
+两者分开的意义：支持用户事后补录（"中午做的饭刚想起来记"），
+时间点回放需按 `occurred_at`（事件发生时间）切片，而非 `created_at`（DB 写入时间）。
+
+**5. ERD 中 inventory 两表的字段级差异 → 已同步 ✅**
+
+`docs/ERD.md` 第 11/12 节已于 2026-07-23 重写为实际实现
+（UUID、DATE、`input_amount`/`input_unit`、`location`、CHECK 约束、FEFO 三级排序、
+`reason`/`source_entry_id`、去掉 `shortage_grams`/`transaction_type`/`related_meal_log_id`）。
+架构原则第 3 条措辞修正；Decision 2 / Decision 6 保留原文并追加修订说明。
 
 ---
 
@@ -119,11 +132,23 @@
   - **`id ASC` 是必需的确定性兜底**：前两个键可空且可重复，无法保证全序；
     缺它会导致同过期日批次的扣减顺序不确定（同样输入两次跑结果不同）
 - **库存下限**：扣到 0 为止，不下穿负数（`SUM` 恒 ≥ 0，语义 = "实际持有"）
+  - DB 层 `CHECK (quantity_grams >= 0)` 固化此不变量（2026-07-23 补）
 - **短缺处理**：不足部分作为独立信号返回，**不写回库存表**
 - **主键**：`BigInteger`（对齐既有业务表约定；仅 `users.id` 为 UUID）
 - **`user_id`**：UUID FK → `users.id`（清 Week 2 的 BIGINT 类型债）
-- **可空**：`expires_at` / `purchased_at`
+- **可空**：`expires_at` / `purchased_at`（类型为 `DATE`，非 TIMESTAMPTZ）
+- **`location`**（`VARCHAR(20)` 可空，值域 `fridge` / `freezer` / `pantry`，2026-07-23 加）
+  - **加它的理由（用户视角）**：同一食材冷冻可放 3 个月、冷藏 2 天 ——
+    **存放位置改变保质期语义**；且取用时需知道是否要提前解冻
+  - 与批次模型天然契合：1kg 肉一半冷藏一半冷冻 = 两个批次，`expires_at` 与 `location` 都不同
+  - 未来可长出：按 location 建议默认 `expires_at`（选冷冻 → +90 天）、
+    "明天计划用冷冻食材 → 今晚解冻"提醒、库存按位置分组显示
+  - **`notes` 不实现**：用户不会填，填了也不驱动任何行为
+    （典型的"看似有用、实际无人用"字段）
 - **索引**：`(user_id, ingredient_id, expires_at)`
+- **零余量批次保留**（不删除）：撤销完成餐次时可直接 `+= take` 回补，
+  批次元数据（过期日/入库日）尚在；删除则无法重建。查询需 `WHERE quantity_grams > 0` 过滤。
+  空间代价可忽略（约 150 字节/行，重度用户 1000 行/年 ≈ 150 KB）
 
 **补充（2026-07-23）：`input_amount` 是入库快照，不可修改**
 
@@ -131,7 +156,7 @@
 - `quantity_grams` = 当前余量，可被 FEFO 扣减与 PATCH 盘点修改
 - **PATCH 只改 `quantity_grams`**
   - 用户视角：库存界面改数字意为"我现在还剩多少"，不是"我当初买了多少"
-  - 入库历史应保持不变，否则记录失真
+  - 入库历史应保持不变，否则记录失真（扣过的批次会把已消耗量凭空变回来）
 - 盘点值允许为 0（`ge=0`，"吃完了"）；入库必须 > 0（`gt=0`）
 - **已知局限**：PATCH 无法把日期字段主动清空回 NULL
   （JSON 的 `null` 与"未传"在 Python 中均为 `None`，无法区分）。
@@ -141,13 +166,20 @@
 
 - `inventory_items` = **当前库存真相源**（读路径 O(1)，不聚合事件）
 - `inventory_transactions` = append-only 审计流水
-  （`delta_grams` / `reason` / `inventory_item_id` / `source_entry_id` / `occurred_at`）
+  （`delta_grams` / `reason` / `inventory_item_id` / `source_entry_id` / `occurred_at` / `created_at`）
+- **`occurred_at` vs `created_at` 分开**（2026-07-23 补）：
+  前者是事件发生时间、后者是 DB 写入时间。支持事后补录，
+  时间点回放按 `occurred_at` 切片才正确
 - **保留策略**：流水只留近 90 天（可配），到期清理**不影响当前库存**
   —— 这是相对纯事件溯源的关键优势（审计日志有独立生命周期）
 - **撤销完成餐次**：追加反向流水 + 回补 `inventory_items`
-  （这是零批次保留而非删除的主要理由：批次元数据在，回补只需 `+= take`）
 - **FK 语义**：`inventory_item_id` / `source_entry_id` 均 `ON DELETE SET NULL`
   —— 批次或餐次被删，审计记录保留，仅指针置空
+- **并发安全**：取批次时用 `SELECT ... FOR UPDATE`（`with_for_update()`）加行锁，
+  防两个请求同时完成餐次导致重复扣同一批次
+- **事务边界**：service 内只 `flush`，`commit` 由 router 统一执行 ——
+  使"标记完成 + 扣库存 + 记流水"三表在单一事务内原子提交
+- **幂等**：`complete_entry` 遇 `is_completed=True` 直接返回，不重复扣减
 
 **补充（2026-07-23）：流水只记系统性消耗**
 
@@ -176,7 +208,8 @@
 
 ### I4 — 临期提醒 ✅ 已实现
 
-- **单级黄色**：`expires_at` 在未来 N 天内（N 默认 3，`settings.inventory_expiry_warning_days` 可配）
+- **单级黄色**：`expires_at` 在未来 N 天内
+  （N 默认 3，`settings.inventory_expiry_warning_days` 可配）
 - **已过期也算 `'expiring'`**（`days_left <= N`，负数自然满足）；
   未来若需区分可加 `'expired'` 值（字段预留、值渐进）
 - **查询时计算，不落库** —— `status = f(expires_at, now)` 是时间的函数，
@@ -191,6 +224,8 @@
   （这是"短缺可见"需求的正确归宿：让预测为负，而非让实际库存为负）
 - **预测视界**：默认 7 天（一个采购周期），支持自定义范围 / 全量
   —— 纯全量会把三周后的计划算进来，导致现在囤货、囤了会坏
+- **绝不真扣库存**：预扣是读时计算的视图，不落库。
+  否则计划一改就要反向回补，且"还没做的饭"凭什么扣真实库存
 
 ### I7 — 缺口统一计算 ⏳ Week 6
 
@@ -212,6 +247,7 @@
 - 填"实际购买量" → `inventory_items` 新增批次 + `purchase` 流水
 - 新批次 `expires_at` 默认 NULL（按 I4 不提醒），之后可在库存界面补填
 - 购买单位 ↔ 库存单位换算依赖 I3 的换算层
+- 可顺带填 `location`（决定默认保质期建议）
 
 ### I10 — 采购项属性 ⏳ Week 6
 
@@ -244,6 +280,8 @@
 - **扣减 = `RecipeIngredient.quantity_grams × entry.servings`**（不除 `variant.servings`）
 - **与 Week 4 营养聚合一致**：`daily-summary` 用 `variant.total_calories × entry.servings`，
   同样不除 —— 同一字段必须同一语义，否则营养与扣减会各算一套
+  （这是发现该语义的关键：若扣减除以 `variant.servings` 而营养不除，同一个 entry
+  会算出"吃了两锅的热量、用了半锅的料"）
 - **`variant.servings` = 纯展示**（"每份热量" = `total ÷ servings`），**不参与任何计算**
 
 **已知缺口：批量烹饪 / 剩菜**
@@ -253,17 +291,55 @@
   `eat` 动作扣成品份数。需新增成品实体、成品保质期（熟食远短于生食）、营养换算
 - **判断**：批量烹饪与剩菜管理是独立子系统（Phase 3+）。
   主流场景"做一份吃一份"下当前模型准确，不为边缘场景引入双层库存复杂度
+- 备选方案 B（完成时扣整锅）已否决：同一锅分 2 顿吃会重复扣两次整锅，比当前偏差更大
 - 命名 smell：字段名 `servings` 实为"倍数"，略误导；改名需 migration，暂不动，以本条说明语义
 
 ---
 
-## 待办技术债
+## 技术债
 
-| # | 债务 | 来源 | 优先级 |
+| # | 债务 | 来源 | 状态 |
 | --- | --- | --- | --- |
-| 1 | `inventory_items.quantity_grams` 缺 `CHECK >= 0` 约束 | 修订记录 3 | 高（不变量应在 DB 层固化） |
-| 2 | `inventory_transactions` 缺 `created_at`（补录时间会错位） | 修订记录 4 | 中 |
-| 3 | Phase 2 表（shopping/notes/meal_logs）ERD 中 `user_id` 仍为 BIGINT 草图 | Week 2 defer | 做到那张表时校准 |
-| 4 | `ingredients.created_by_user_id` 类型不匹配（BigInteger vs UUID） | Week 2 defer | Week 6（I11 需要） |
-| 5 | 零余量批次与 90 天前流水的定期清理任务 | I2 | Week 7（引入后台任务时） |
-| 6 | `quick-log` 返回的 entry 不含 `meal_plan_id`，无法直接 complete | Week 5 测试发现 | 低（Week 10 前端时补） |
+| 1 | ~~`inventory_items.quantity_grams` 缺 `CHECK >= 0`~~ | 修订 3 | ✅ 2026-07-23（`7ce8329404eb`） |
+| 2 | ~~`inventory_transactions` 缺 `created_at`（补录时间错位）~~ | 修订 4 | ✅ 2026-07-23（`e43bb8446f56`） |
+| 3 | ~~ERD 第 11/12 节与实现约 10 处字段级不一致~~ | 修订 5 | ✅ 2026-07-23 已同步 |
+| 4 | ERD 中 Phase 2 表（shopping / notes / meal_logs）`user_id` 仍为 BIGINT 草图 | Week 2 defer | ⏳ 做到那张表时校准 |
+| 5 | `ingredients.created_by_user_id` 类型不匹配（BigInteger vs UUID） | Week 2 defer | ⏳ Week 6（I11 需要） |
+| 6 | 零余量批次与 90 天前流水的定期清理任务 | I2 | ⏳ Week 7（引入后台任务时） |
+| 7 | `quick-log` 返回的 entry 不含 `meal_plan_id`，无法直接 complete | Week 5 测试发现 | ⏳ 低（Week 10 前端时补） |
+| 8 | ~~`location` / `notes` 未实现~~ | Week 5 | ✅ 2026-07-23 定案：`location` 已加，`notes` 不做 |
+
+---
+
+## 流程笔记
+
+### Alembic migration 验证清单（本项目踩过三次的坑）
+
+1. **`--autogenerate` 不检测 CheckConstraint 增删** → 这类约束必须手写 migration
+   （加列 / 加表能检测；约束、索引名变更、CHECK 不行）
+2. **`alembic upgrade` 输出没有 `Running upgrade X -> Y` 那行 = 什么都没执行**
+   - 空 migration（model 未被 `alembic/env.py` import）会静默"成功"
+   - 版本已记录为 applied 时，改文件内容也**不会**重跑
+3. **apply 前先 `grep -A8 "def upgrade" <文件>`** 确认里面不是 `pass`
+4. 版本记录与实际库状态不一致时用 **`alembic stamp <rev>`** 修正指针（不执行 DDL）；
+   不要用 `downgrade`（会尝试 DROP 不存在的对象而报错）
+5. 加约束前先查现有数据是否满足（`SELECT COUNT(*) WHERE <违反条件>` 应为 0）
+6. 删 migration 文件前先看 `alembic current`：在 current 之后可直接删；
+   是/早于 current 必须先 downgrade，否则 `alembic_version` 指向不存在的 revision
+7. 新建域后记得在 `alembic/env.py` 加 `from app.<domain> import models  # noqa: F401`，
+   否则 model 不进 `Base.metadata`，autogenerate 检测不到
+
+### 其他易踩点
+
+- **FastAPI 路由顺序敏感**：静态路径（`/daily-summary`）必须注册在动态路径（`/{plan_id}`）之前，
+  否则被捕获为参数并返回 422，且**不会** fallthrough 到后面的路由
+- **`lru_cache` 缓存的 settings**：改 `.env` 后需完全重启进程，`--reload` 不一定生效
+- **"假 CORS"**：后端 500 时无法附加 CORS 响应头，浏览器报的 CORS 是表象，
+  真因要看后端 Traceback
+- **`localhost` ≠ `127.0.0.1`**：origin 层面是不同源，同时影响 CORS 白名单与 Clerk `azp`，
+  两处都须与浏览器地址栏一致
+- **排序必须全序**：可空/可重复的排序键需补唯一列（如 `id`）兜底，否则结果不确定
+  —— 这类 bug 时对时错，测试极难发现
+- **中文标点混入代码**：全角顿号 `、` 等会导致 `SyntaxError: invalid character`，
+  粘贴后扫一眼行尾
+- **测试脚本不要硬编码会被删除的 id**：应在脚本内先创建再操作，保证可重复运行
