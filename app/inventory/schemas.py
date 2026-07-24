@@ -15,7 +15,8 @@ class InventoryItemCreate(BaseModel):
     input_unit: str = Field(default="g", max_length=20)
     purchased_at: date | None = None
     expires_at: date | None = None
-
+    # 存放位置: 冷藏/冷冻/常温; 影响保质期语义与找取
+    location: str | None = Field(default=None, pattern="^(fridge|freezer|pantry)$")
 
 class InventoryItemUpdate(BaseModel):
     """盘点修正批次。改的是当前余量(quantity_grams), 不动入库历史(input_amount/unit)。
@@ -24,6 +25,7 @@ class InventoryItemUpdate(BaseModel):
     quantity_grams: Decimal | None = Field(default=None, ge=0)  # ge=0: 盘点可为 0(吃完了)
     purchased_at: date | None = None
     expires_at: date | None = None
+    location: str | None = Field(default=None, pattern="^(fridge|freezer|pantry)$")
 
 
 class InventoryItemRead(BaseModel):
@@ -37,6 +39,7 @@ class InventoryItemRead(BaseModel):
     input_unit: str
     purchased_at: date | None
     expires_at: date | None
+    location: str | None
     # I4: 'expiring'(未来 N 天内过期) / None(不临期或无过期日)。查询时算,不落库。
     expiry_status: str | None = None
     created_at: datetime

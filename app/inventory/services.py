@@ -29,6 +29,7 @@ async def create_inventory_item(
         input_unit=data.input_unit,
         purchased_at=data.purchased_at,
         expires_at=data.expires_at,
+        location=data.location,
     )
     db.add(item)
     await db.flush()   # flush 让 DB 生成 item.id, 但不提交(供下面流水引用)
@@ -158,5 +159,7 @@ async def update_inventory_item(
         item.purchased_at = data.purchased_at
     if data.expires_at is not None:
         item.expires_at = data.expires_at
+    if data.location is not None:
+        item.location = data.location
     await db.flush()
     return item

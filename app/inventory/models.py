@@ -49,6 +49,9 @@ class InventoryItem(Base):
     purchased_at: Mapped[date | None] = mapped_column(Date)
     # FEFO 排序键; NULL = 无过期日(排最后, 不提醒)
     expires_at: Mapped[date | None] = mapped_column(Date)
+    # 存放位置: 'fridge'(冷藏) / 'freezer'(冷冻) / 'pantry'(常温)
+    # 影响保质期语义(冷冻远长于冷藏)与找取; 可空, 不填不影响任何逻辑
+    location: Mapped[str | None] = mapped_column(String(20))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -101,6 +104,10 @@ class InventoryTransaction(Base):
     )
 
     occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    # DB 写入时间; 与 occurred_at 分开 → 事后补录时时间点回放才正确(D 系列决策)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
