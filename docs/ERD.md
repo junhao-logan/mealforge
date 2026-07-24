@@ -13,7 +13,7 @@ MealForge 采用 PostgreSQL 作为主数据库。核心实体围绕**用户营�
 
 1. **规范化优先**：所有食材份量统一为克数；营养信息统一为 per 100g
 2. **缓存聚合字段**：高频查询的聚合值（菜谱总营养）写入实体表，写入时同步更新
-3. **事件流 + 快照双写**：库存采用 `InventoryItem`（当前快照）+ `InventoryTransaction`（变动日志）混合架构
+3. **状态表 + 审计流水**：库存以 `InventoryItem` 为唯一真相源（读路径 O(1)），`InventoryTransaction` 为 append-only 审计日志。当前库存**不由事件求和**得出 —— 故流水可设保留期（90 天）而不影响库存正确性
 4. **AI 调用全链路可观测**：所有 LLM 调用记录到 `AIGenerationLog`，菜谱可追溯生成来源
 5. **演进式建模**：MVP 阶段尽量减少表数，Phase 2 演化时通过 migration 补足
 
@@ -418,77 +418,94 @@ CREATE INDEX idx_meal_logs_plan_entry ON meal_logs(plan_entry_id);
 
 ### 11. `inventory_items`
 
-库存快照表。读路径走这里。
+库存批次表。当前库存的**唯一真相源**，读路径走这里。
 
 ```sql
 CREATE TABLE inventory_items (
     id                       BIGSERIAL PRIMARY KEY,
-    user_id                  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id                  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     ingredient_id            BIGINT NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
-    
-    quantity_grams           NUMERIC(10, 2) NOT NULL CHECK (quantity_grams >= 0),
-    
-    purchased_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at               TIMESTAMPTZ,
-    
-    -- 一个用户对同一食材可有多个批次(不同购买日期),所以不加 UNIQUE
-    -- 业务层决定消耗时是 FIFO / LIFO / 用户手选
-    
-    location                 VARCHAR(50),           -- '冰箱冷藏' / '冰箱冷冻' / '常温'
-    notes                    VARCHAR(200),
-    
+
+    -- 克本位(I3/D5=B): quantity_grams 是计算唯一来源
+    quantity_grams           NUMERIC(10, 2) NOT NULL,   -- 当前余量; 可被扣减/盘点修改
+    input_amount             NUMERIC(10, 2) NOT NULL,   -- 入库时原始输入量(快照, 不可改)
+    input_unit               VARCHAR(20)   NOT NULL,    -- 入库时原始单位
+
+    purchased_at             DATE,                      -- 可空; FEFO 次级排序键
+    expires_at               DATE,                      -- 可空; FEFO 主排序键
+    location                 VARCHAR(20),               -- 'fridge' / 'freezer' / 'pantry'
+
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT ck_inventory_items_qty_non_negative CHECK (quantity_grams >= 0)
 );
 
-CREATE INDEX idx_inventory_items_user_ingredient ON inventory_items(user_id, ingredient_id);
-CREATE INDEX idx_inventory_items_expires_at ON inventory_items(user_id, expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX idx_inventory_items_user_ingredient_expires
+    ON inventory_items(user_id, ingredient_id, expires_at);
 ```
 
 **关键设计**：
 
-- 允许同一食材多条记录（不同批次、不同保质期）
-- `CHECK (quantity_grams >= 0)`：库存不能为负。不足走 `inventory_transactions.shortage_grams` 记账
+- **批次模型**：同一食材可多行（不同批次/保质期/存放位置），无 UNIQUE 约束
+- **FEFO 消耗顺序**：`expires_at ASC NULLS LAST, purchased_at ASC NULLS LAST, id ASC`
+  - 先过期先扣；平手则先买先扣（FIFO）
+  - **`id ASC` 是必需的确定性兜底**：前两键可空且可重复，无法构成全序；
+    缺它则同过期日批次的扣减顺序不确定（同输入两次跑结果不同）
+- **`CHECK (quantity_grams >= 0)`**：库存恒非负。不足部分**不写回本表**，
+  作为独立"短缺"信号在 API 响应中返回（见修订：不使用 `shortage_grams` 字段）
+- **`input_amount` 是入库快照**，仅 INSERT 写入；`quantity_grams` 才是可变的当前余量。
+  PATCH 盘点只改 `quantity_grams`（用户视角："我现在还剩多少"，非"我当初买了多少"）
+- **`location`** 影响保质期语义（冷冻远长于冷藏）与取用便利；可空，不填不影响任何逻辑
+- **零余量批次保留不删**：撤销完成餐次时可直接回补（批次元数据尚在）；
+  查询需 `WHERE quantity_grams > 0` 过滤
 
+---
 ---
 
 ### 12. `inventory_transactions`
 
-库存变动事件流。所有变动都在这里留痕。
+库存变动审计流水。**append-only**；当前库存**不由本表求和**得出。
 
 ```sql
 CREATE TABLE inventory_transactions (
     id                       BIGSERIAL PRIMARY KEY,
-    user_id                  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id                  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     ingredient_id            BIGINT NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
     inventory_item_id        BIGINT REFERENCES inventory_items(id) ON DELETE SET NULL,
-    
-    delta_grams              NUMERIC(10, 2) NOT NULL,  -- 正=进货,负=消耗/过期
-    shortage_grams           NUMERIC(10, 2) NOT NULL DEFAULT 0,  -- 强制消耗时的欠缺量
-    
-    transaction_type         VARCHAR(20) NOT NULL,
-        -- 'purchase' / 'consumption' / 'expiry' / 'manual_adjust' / 'correction'
-    
-    -- 来源关联
-    related_meal_log_id      BIGINT REFERENCES meal_logs(id) ON DELETE SET NULL,
-    related_plan_entry_id    BIGINT REFERENCES meal_plan_entries(id) ON DELETE SET NULL,
-    
-    occurred_at              TIMESTAMPTZ NOT NULL,    -- 事件实际发生时间(用户做饭那一刻)
-    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- DB 写入时间
-    
-    notes                    TEXT
+
+    delta_grams              NUMERIC(10, 2) NOT NULL,   -- 正=入库, 负=消耗
+    reason                   VARCHAR(20) NOT NULL,
+        -- 'purchase'（入库） / 'meal_consumption'（做饭扣减）
+        -- 'adjustment' / 'waste' 保留未用（人工调整不记流水，见下）
+
+    source_entry_id          BIGINT REFERENCES meal_plan_entries(id) ON DELETE SET NULL,
+
+    occurred_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- 事件发生时间
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()   -- DB 写入时间
 );
 
-CREATE INDEX idx_inv_tx_user_ingredient_occurred ON inventory_transactions(user_id, ingredient_id, occurred_at DESC);
-CREATE INDEX idx_inv_tx_type ON inventory_transactions(transaction_type);
-CREATE INDEX idx_inv_tx_shortage ON inventory_transactions(user_id, shortage_grams) WHERE shortage_grams > 0;
+CREATE INDEX idx_inventory_transactions_user_ingredient_time
+    ON inventory_transactions(user_id, ingredient_id, occurred_at);
+CREATE INDEX idx_inventory_transactions_source_entry
+    ON inventory_transactions(source_entry_id);
+CREATE INDEX idx_inventory_transactions_occurred
+    ON inventory_transactions(occurred_at);   -- 支撑 90 天保留期的清理任务
 ```
 
 **关键设计**：
 
-- `occurred_at` vs `created_at` 分开：支持补录历史
-- `shortage_grams > 0` 的 partial index 直接喂"急需采购"清单
-- 时间点库存回放：`SUM(delta_grams) WHERE occurred_at <= T AND shortage_grams=0 计入扣减`
+- **只记系统性消耗**：`purchase`（入库）与 `meal_consumption`（做饭扣减）。
+  PATCH 盘点修正与 DELETE 删批次**不记流水** ——
+  用户视角：查流水是想追溯"食材被哪顿饭消耗了"，不关心自己的修正历史
+- **`occurred_at` vs `created_at` 分开**：支持事后补录（"中午做的饭刚想起来记"），
+  时间点回放按 `occurred_at` 切片才正确
+- **保留期 90 天**：因当前库存不依赖本表，旧流水可清理而不影响正确性
+  —— 这是相对纯事件溯源的关键优势（后者截断历史即算错当前值）
+- **FK 均 `SET NULL`**：批次或餐次被删，审计记录保留，仅指针置空
+- **`source_entry_id` 索引**：支撑"这顿饭消耗了什么"的反查与撤销
+- **无 `shortage_grams` 字段**：短缺不落库（见 `DECISIONS.md` I1 / 修订 1）
+
 
 ---
 
@@ -691,7 +708,21 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 
 **简历素材**：
 > "Implemented event-sourced inventory with snapshot reconciliation. `InventoryItem` stores current state for O(1) reads; `InventoryTransaction` records every delta with `occurred_at` (event time) and `created_at` (DB write time) separated to support backfilled entries. A `shortage_grams` field enables graceful degradation: users can over-consume planned ingredients and the system auto-generates restocking suggestions."
-
+> **⚠️ 2026-07-23 修订（Week 5 实现）**
+>
+> 实际实现不是事件溯源：`InventoryItem` 是**唯一真相源**，`InventoryTransaction`
+> 为纯审计日志，当前库存**不由事件求和**得出。这带来一个原设计没有的优势 ——
+> 流水可设 90 天保留期并定期清理，而不影响库存正确性（纯事件溯源无法截断历史）。
+>
+> `shortage_grams` 字段**未实现**：短缺改为瞬时计算、仅在 API 响应返回，
+> 避免与 Week 6 采购缺口（I7）形成两个真相源。
+>
+> 修正后的简历表述：
+> "Inventory uses a state table as the single source of truth with an append-only
+> audit log, rather than full event sourcing. Current stock is read in O(1) without
+> event replay, which lets the audit log carry an independent 90-day retention policy.
+> Deductions follow FEFO across batches within a single transaction, with a
+> deterministic total ordering (expiry, purchase date, id) so results are reproducible."
 ---
 
 ### Decision 3: MealPlan as Aggregate Root with Flexible Date Range
@@ -770,7 +801,17 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 
 **简历素材**：
 > "Inventory shortage is tracked as a first-class concept: when planned consumption exceeds available stock, `quantity_grams` is clamped at 0 (enforced by CHECK constraint) while `inventory_transactions.shortage_grams` records the deficit. A partial index on `shortage_grams > 0` directly powers the 'urgent shopping' suggestion query without table scans."
-
+> **⚠️ 2026-07-23 修订（Week 5 实现）**
+>
+> 核心决策不变（允许执行、库存 clamp 至 0、UI 警告不阻断），但短缺的**载体**变了：
+> 不写入 `inventory_transactions.shortage_grams`（该字段未实现），
+> 而是由扣减函数**返回短缺列表**，在 `complete_entry` 的响应中一并给出。
+>
+> 理由：短缺是瞬时计算结果。落库会与 Week 6 的采购缺口（`compute_shortfall`，见 I7）
+> 重复计算，形成两个可能漂移的真相源。Week 6 的采购清单将统一由 I7 生成。
+>
+> `CHECK (quantity_grams >= 0)` 已于 2026-07-23 补上（migration `7ce8329404eb`），
+> 非负性现有双层保护：应用层 FEFO 的 `min()` + DB 层 CHECK。
 ---
 
 ### Decision 7: AI Observability as Independent Table
