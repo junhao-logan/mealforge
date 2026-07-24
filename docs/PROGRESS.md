@@ -7,16 +7,17 @@
 
 ## 🎯 当前状态
 
-- **当前周次**：Week 4 完成 ✅ —— Phase 1（MVP 基础）收官，准备进「Clerk 前端骨架」里程碑
-- **当前任务**：Week 4 餐食规划全部完成。MealPlan/MealPlanEntry 两表 + 计划 CRUD + quick-log（default plan 无感记录）+ daily-summary（跨 plan 汇总 vs 目标）。前三周（食材/菜谱/营养目标）由 daily-summary 真正串起来。
-- **上次更新**：2026-06-19
-- **下一步**：Clerk 前端骨架里程碑（见 docs/FRONTEND_MILESTONE.md）—— 打通登录+真 token，一次性真测积压的认证端点（/users/me + 营养目标 4 个 + 计划全家桶）
+-### Week 5 — 库存管理 ✅ 完成
+- 批次模型 + FEFO 扣减 + 临期提醒 + 完整 CRUD，全部真 token 端到端验证
+- 决策 I1–I13 见 DECISIONS.md；技术债 8 条清 4（CHECK/created_at/ERD同步/location）
+- 修复 Week 4 路由顺序 bug（daily-summary 被遮蔽）
 
-### Week 5 — 库存管理（决策已定，待实现）
-- 决策 I1–I10 锁定（详见 CHANGELOG）
-- Week 5 实现范围：inventory_items + inventory_transactions 建表/migration、
-  user_id UUID 校准、库存 CRUD、FEFO 扣减挂 MealPlanEntry.complete、临期提醒、克本位
-- I6–I10（预扣视图/缺口函数/采购）实现推迟到 Week 6
+### 下一步 — Week 6 智能采购
+- I7 缺口统一计算 `compute_shortfall(user, start, end)`
+- I6 库存预扣视图（实际 + 预计剩余，可负）
+- I8 采购双来源（auto/manual）+ I9 回流入库 + I10 采购项属性
+- I11 用户自建内容（清 created_by_user_id UUID 债）
+- 前置：ShoppingList 表设计
 
 ### 项目基础信息
 
@@ -218,91 +219,6 @@
 
 - ...
 
-### Chat 11 — Week 3：TDEE 计算 + 营养目标
-
-**日期**：2026-06-18
-**任务**：定 N1–N4 决策，实现 TDEE 计算 service + 营养目标 CRUD
-
-**完成**：
-
-- N1–N4 全部锁定（见决策表）
-- users 表加 5 身体字段（height_cm/weight_kg/age/biological_sex/activity_level，全 nullable）
-- 新建 app/nutrition/ 域：UserNutritionGoal 模型（user_id UUID FK→users，CASCADE+unique）
-- migration 842633d6643a：users 加列 + 建 user_nutrition_goals（FK 类型 UUID 实锤、CASCADE、unique 校验）
-- services.py：compute_bmr（Mifflin-St Jeor）+ compute_nutrition_goal（BMR→TDEE→目标热量→宏量），全 Decimal，临时脚本验证 5 用例（含自定义 delta、other 性别边界）通过
-- router.py：4 端点（PUT body-metrics 部分更新 / POST compute 算并存 / PUT override 手动覆盖 / GET 读），upsert on user_id，is_custom 区分系统算 vs 手动改
-- 营养目标存库逻辑用临时脚本验证（compute 存 2094→override 改 1800→psql 直连确认库内 1800/is_custom=true）
-
-**关键学习**：
-
-- session 身份映射 + expire_on_commit=False：单 session 内 commit 后对象可能 stale（脚本读到旧值假象），生产每请求独立 session 天然规避；测试脚本需 db.expire_all()/refresh 强制刷新
-- Mifflin-St Jeor 不需体脂率，平衡精度与填写门槛；蛋白按体重定是健身场景标准
-- 强制关键字参数（def f(\*, ...)）防多参数按位置传错
-
-**下一步**：Week 4 餐食规划 → 补每日营养汇总 → 简化版前端里程碑
-
-**遗留问题**：
-
-- nutrition 4 端点的真 token 端到端测试 defer 到前端（同 /users/me）；逻辑已用绕认证脚本验证
-- 每日营养汇总挪 Week 4（依赖 meal_plan_entries）
-- ERD 待校准：users.clerk_user_id（非 auth_provider_id）、user_nutrition_goals.user_id 改 UUID、recipe_ingredients 补 input_amount/input_unit（D5=B）
-
-### Chat 12 — Week 4：餐食规划（Phase 1 收官）
-
-**日期**：2026-06-19
-**任务**：定 P1–P4 决策，实现 MealPlan/Entry 建模 + 计划 CRUD + quick-log + 每日营养汇总
-
-**完成**：
-
-- P1–P4 + 选2 全部锁定（见决策表）
-- app/meal_plans/ 域：MealPlan（UUID FK→users、CHECK 日期、partial index 模板）+ MealPlanEntry（两 FK：plan CASCADE / variant RESTRICT）
-- migration a9f5136bc290：两表落库，CHECK 约束 + partial index + 三 FK ondelete 全 review 通过
-- schemas：计划/entry 的 Create/Read + quick-log + daily-summary（MacroSummary 三元组）
-- services：meal_type_sort_key（防 dinner 字母序）+ get_or_create_default_plan + expand_plan_range
-- router 9 端点：计划 CRUD（含归属校验 \_get_owned_plan，非本人 404）+ entry 加/删/complete（PATCH）+ quick-log（default plan 无感）+ daily-summary（跨 plan join + NULL 传播 vs 目标）
-- ERD 校准：meal_plans.user_id UUID、recipe_ingredients 补 input_amount/input_unit、顶部加 user_id BIGINT→UUID 草图欠债备注
-
-**关键学习**：
-
-- 认证 vs 授权：get_current_user 是认证（你是谁），\_get_owned_plan 是授权（你能不能碰这资源）；非本人返 404 而非 403 防资源存在性泄漏
-- 固定路径（/quick-log /daily-summary）需排在动态路径 /{plan_id} 前，避免被误当 plan_id
-- HTTP 方法语义：PATCH 局部改（标记完成只翻 is_completed）vs PUT 整体替换
-- MealPlan 是 entry 的必需容器非可选功能；default plan 让容器对记录型用户隐形
-
-**下一步**：Clerk 前端骨架里程碑（真 token 验证积压认证端点）→ Week 5 库存
-
-**遗留问题**：
-
-- 全部认证端点（/users/me + 营养目标 + 计划全家桶）真 token 端到端测试集中到前端骨架里程碑
-- default plan 的 quick-log 逻辑（get-or-create + 撑大）未真测，随前端骨架验证
-- 每日营养汇总已补（Week 3 挪来的债还清）
-- ERD 其余表 user_id 草图仍 BIGINT（inventory/shopping/notes/meal_logs），做到那周再校准
-
-## Chat 13 — Clerk 前端骨架里程碑（完成）
-
-**目标**：搭最小 React 前端，打通 Clerk 登录 → 拿真 JWT → 砸后端认证端点，
-一次性真测积压的所有认证接口（此前只有 mock/curl 验证）。
-
-**做了什么**
-- 前端脚手架：Vite + React（纯 JS，非 TS——一次性骨架，正式前端 Week 10 再上分层 + TS）。
-- 接 Clerk React SDK v5：`<ClerkProvider>` 包根、`.env.local` 存 publishable key
-  （`VITE_` 前缀经 `import.meta.env` 注入）、`<SignedIn>/<SignedOut>/<SignInButton>/<UserButton>`。
-- 后端 CORS：新增 `cors_allowed_origins_raw`（逗号分隔 property，复用 azp 同款模式），
-  允许 `http://127.0.0.1:5173` + `http://localhost:5173` 双 origin。
-- 启用 azp：`.env` 填 `CLERK_AUTHORIZED_PARTIES_RAW`（双 origin），否定测试确认能拦（错误 azp → 401）。
-
-**端到端验证（全绿）**
-- `GET /users/me` → 200，JIT 首次建 identity-shadow 行（sub→UUID，email claim 透传落库），
-  二次调用 count 仍为 1（幂等确认）。
-- 营养目标全链路：`PUT body-metrics`(200) → `POST compute`(200, TDEE≈2594 kcal maintenance)
-  → `GET`(200 读回一致) → `PUT override`(200, upsert 覆盖为 2200, is_custom)。
-- 真 token 解码核对：`iss=https://literate-koala-34.clerk.accounts.dev`（对上后端），
-  `email` claim 存在（透传闭环），`exp-iat=60s`（轮换）。
-
-**踩过的坑（简历素材）**
-- `localhost` ≠ `127.0.0.1`：origin 层面不同，同时咬 CORS 允许列表和 Clerk azp——两处须与浏览器地址栏一致。统一改用 `localhost`。
-- "假 CORS"：后端 500（DB 未起，asyncpg ConnectionRefused）时无法附加 CORS
----
 
 ## 📚 相关文档索引
 
