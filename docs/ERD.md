@@ -514,14 +514,18 @@ CREATE INDEX idx_inventory_transactions_occurred
 ```sql
 CREATE TABLE shopping_lists (
     id                       BIGSERIAL PRIMARY KEY,
-    user_id                  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    
+    user_id                  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+
     name                     VARCHAR(100),
     source_meal_plan_id      BIGINT REFERENCES meal_plans(id) ON DELETE SET NULL,
-    
+
+    -- 生成该清单时使用的预测视界（I7）: 缺口 = 未来 N 天需求 − 库存
+    forecast_start           DATE,
+    forecast_end             DATE,
+
     status                   VARCHAR(20) NOT NULL DEFAULT 'active',
         -- 'active' / 'completed' / 'archived'
-    
+
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -537,20 +541,42 @@ CREATE INDEX idx_shopping_lists_user_status ON shopping_lists(user_id, status);
 CREATE TABLE shopping_list_items (
     id                       BIGSERIAL PRIMARY KEY,
     shopping_list_id         BIGINT NOT NULL REFERENCES shopping_lists(id) ON DELETE CASCADE,
-    ingredient_id            BIGINT NOT NULL REFERENCES ingredients(id) ON DELETE RESTRICT,
-    
-    needed_grams             NUMERIC(10, 2) NOT NULL,
-    
+
+    -- 食材关联可空(I10): auto 项与"选已有食材"的 manual 项有值;
+    -- 纯文本 manual 项(厨房纸)为 NULL, 用 item_name 显示
+    ingredient_id            BIGINT REFERENCES ingredients(id) ON DELETE RESTRICT,
+    item_name                VARCHAR(100),    -- 非食材/纯文本项的显示名; 有 ingredient_id 时可空
+
+    -- 来源(I8): 'auto'=缺口生成(可被重算覆盖) / 'manual'=手动加(重算保留)
+    source                   VARCHAR(10) NOT NULL DEFAULT 'manual',
+
+    -- 需求量(I7 缺口): auto 项有克数; 非食材 manual 项无克数 → nullable(I10)
+    needed_grams             NUMERIC(10, 2),
+
+    -- 是否买完后入库(I10): 食材=true(→ I9 回流建批次); 厨房纸等=false(纯提醒)
+    add_to_inventory         BOOLEAN NOT NULL DEFAULT TRUE,
+
+    -- 采购回填(I9): 用户实际买了多少 → 勾选购买时回流入库
     is_purchased             BOOLEAN NOT NULL DEFAULT FALSE,
+    purchased_amount         NUMERIC(10, 2),  -- 实际购买量(用户原始单位, 展示)
+    purchased_unit           VARCHAR(20),
+    purchased_grams          NUMERIC(10, 2),  -- 归一化克数(经 I3 换算), 回流入库用
     purchased_at             TIMESTAMPTZ,
-    
-    category_override        VARCHAR(50),     -- 用户可覆盖食材默认分类(为了 UI 分区显示)
+
+    category_override        VARCHAR(50),     -- 用户可覆盖食材默认分类(UI 分区显示)
     notes                    VARCHAR(200),
-    
-    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- 数据完整性: 要么关联食材, 要么有文本名(不能两者皆空)
+    CONSTRAINT ck_shopping_list_items_has_identity
+        CHECK (ingredient_id IS NOT NULL OR item_name IS NOT NULL)
 );
 
-CREATE UNIQUE INDEX idx_shopping_list_items_list_ingredient ON shopping_list_items(shopping_list_id, ingredient_id);
+-- auto 项按 (清单, 食材) 唯一, 支持重算时 upsert; manual 项不受此约束(见下)
+CREATE UNIQUE INDEX idx_shopping_list_items_auto_dedup
+    ON shopping_list_items(shopping_list_id, ingredient_id)
+    WHERE source = 'auto' AND ingredient_id IS NOT NULL;
 ```
 
 ---
