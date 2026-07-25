@@ -97,7 +97,6 @@ CREATE TABLE users (
 );
 -- clerk_user_id 的 UNIQUE 约束已隐含索引，无需再单独建 index
 
-CREATE INDEX idx_users_auth_provider_id ON users(auth_provider_id);
 ```
 
 ---
@@ -305,8 +304,7 @@ CREATE INDEX idx_recipe_ingredients_ingredient_id ON recipe_ingredients(ingredie
 **关键设计**：
 
 - `quantity_grams` 是计算的唯一来源
-- `display_quantity / display_unit` 仅作展示，保留用户原始输入（"2 个" / "1 勺"）以便 UI 还原
-
+- `input_amount / input_unit` 仅作展示与还原，保留用户原始输入（"2 个" / "1 勺"）以便 UI 还原（D5=B）
 ---
 
 ### 8. `meal_plans`
@@ -644,26 +642,27 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 ## Indexing Strategy
 
 总体原则：**索引服务查询模式，不为索引而索引**。下面列出 MVP 阶段已识别的关键查询和对应索引。
-
 | 查询模式 | 索引 | 表 |
 |---|---|---|
-| 按用户 + 日期范围查计划 | `(user_id, start_date, end_date)` | `meal_plans` |
-| 按计划 + 日期查餐次 | `(meal_plan_id, scheduled_date)` | `meal_plan_entries` |
-| 查临期食材 | `(user_id, expires_at) WHERE expires_at IS NOT NULL` partial | `inventory_items` |
-| 时间点库存回放 | `(user_id, ingredient_id, occurred_at DESC)` | `inventory_transactions` |
-| 急需采购清单 | `(user_id, shortage_grams) WHERE shortage_grams > 0` partial | `inventory_transactions` |
-| LLM 输出缓存命中 | `(prompt_input_hash) WHERE status='success'` partial | `ai_generation_logs` |
-| LLM 限流查询 | `(user_id, created_at)` | `ai_generation_logs` |
+| 按用户 + 日期范围查计划 | `idx_meal_plans_user_dates` | `meal_plans` |
+| 按 is_template 筛模板 | `idx_meal_plans_template` | `meal_plans` |
+| 按计划 + 日期查餐次 | `idx_meal_plan_entries_plan_date` | `meal_plan_entries` |
+| 按完成状态筛餐次 | `idx_meal_plan_entries_completed` | `meal_plan_entries` |
+| 按 variant 反查餐次 | `idx_meal_plan_entries_variant` | `meal_plan_entries` |
+| 按食材取批次（FEFO）/ 查临期 | `idx_inventory_items_user_ingredient_expires` = `(user_id, ingredient_id, expires_at)` | `inventory_items` |
+| 按食材查库存变动历史 | `idx_inventory_transactions_user_ingredient_time` = `(user_id, ingredient_id, occurred_at)` | `inventory_transactions` |
+| 按餐次反查扣减流水 | `idx_inventory_transactions_source_entry` | `inventory_transactions` |
+| 按时间清理旧流水（90天保留） | `idx_inventory_transactions_occurred` | `inventory_transactions` |
+
+> ⚠️ 以下为 Phase 2+ 设计预留，对应表/字段尚未实现：
+
+| 查询模式（预留） | 索引 | 表 |
+|---|---|---|
+| 采购缺口 | 无专用索引；由 `compute_shortfall` 实时计算（DECISIONS I7） | Week 6 |
+| LLM 输出缓存命中 | `(prompt_input_hash) WHERE status='success'` partial | `ai_generation_logs`（未建） |
+| LLM 限流查询 | `(user_id, created_at)` | `ai_generation_logs`（未建） |
 | 食材按分类筛选 | `(category)` | `ingredients` |
-| 食材搜索 | `(name_normalized)` (Phase 2 考虑 GIN/pg_trgm) | `ingredients` |
-| 按 tag 找菜谱变体 | `(tag)` | `recipe_variant_tags` |
-| 按 variant 列出所有 tag | `(recipe_variant_id)` | `recipe_variant_tags` |
-
-**Phase 2 才加的索引**（先观察是否真热）：
-
-- `ingredients` 的 GIN/pg_trgm 模糊搜索索引（MVP 用 LIKE 'xxx%' 配 B-tree 够用）
-- `meal_logs` 的复合索引（具体看 Phase 2 主要查询模式）
-
+| 食材搜索 | `(name_normalized)`（Phase 2 考虑 GIN/pg_trgm） | `ingredients` |
 ---
 
 ## Design Decisions
@@ -674,7 +673,7 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 
 **问题**：用户既要能用熟悉单位（个 / 勺 / 杯），系统又要做高效营养计算和食材库统一。
 
-**选择**：所有 `recipe_ingredients.quantity_grams` 统一存克数。UI 适配通过 `ingredients.default_unit + grams_per_unit` 完成；用户原始输入额外存在 `recipe_ingredients.display_quantity / display_unit` 用于展示。
+**选择**：所有 `recipe_ingredients.quantity_grams` 统一存克数。UI 适配通过 `ingredients.default_unit + grams_per_unit` 完成；用户原始输入额外存在 `recipe_ingredients.input_amount / input_unit` 用于展示与还原（D5=B）
 
 **Trade-off**：
 - ✅ 营养计算是 O(1) 算术（不需要 JOIN 单位换算表）
@@ -686,7 +685,7 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 **备选方案**：纯方案 B（unit 存在 `recipe_ingredients` + UnitConversion 表）。被否原因：N+1 查询风险高，AI 生成时单位归一化噩梦。
 
 **简历素材**：
-> "Designed ingredient-level unit metadata (`default_unit + grams_per_unit`) to decouple user-friendly display from normalized internal storage. All quantities are stored in grams, enabling O(1) nutrition calculation while preserving user input fidelity via `display_quantity/display_unit` fields."
+> "Designed ingredient-level unit metadata (`default_unit + grams_per_unit`) to decouple user-friendly display from normalized internal storage. All quantities are stored in grams, enabling O(1) nutrition calculation while preserving user input fidelity via `input_amount/input_unit` fields.
 
 ---
 

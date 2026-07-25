@@ -77,7 +77,7 @@ async def deduct_for_entry(
 ) -> list[dict]:
     """完成餐次 → 按 FEFO 扣减库存(I1)。
     · 需求 = RecipeIngredient.quantity_grams × entry.servings (I13: 配方倍数)
-    · 按 expires_at ASC NULLS LAST, purchased_at ASC 逐批扣(FEFO)
+    · 按 expires_at ASC NULLS LAST, purchased_at ASC NULLS LAST, id ASC 逐批扣(FEFO)
     · 扣到 0 不下穿; 不足部分作为短缺返回, 不写回库存(I1)
     · 每笔扣减记 meal_consumption 流水, 关联 source_entry_id (I2)
     不 commit —— 由 router 与 entry.is_completed 同事务提交。
