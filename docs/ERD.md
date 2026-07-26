@@ -527,8 +527,8 @@ CREATE TABLE shopping_lists (
         -- 'active' / 'completed' / 'archived'
 
     created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
     -- 预测视界成对存在: 纯手动清单两列全 NULL, auto 清单两列都有值;
     -- 且 end >= start。对齐 meal_plans.chk_date_range 的先例
     CONSTRAINT ck_shopping_lists_forecast_range CHECK (
@@ -580,13 +580,14 @@ CREATE TABLE shopping_list_items (
         CHECK (ingredient_id IS NOT NULL OR item_name IS NOT NULL)
 );
 
--- auto 未购项按 (清单, 食材) 唯一, 支持重算 upsert;
--- 已购 auto 是冻结的历史事实, 移出索引管辖; manual 不受约束
+-- 主查询路径: 加载某清单的全部项(manual + auto + 已购); Postgres 不为 FK 自动建索引
+CREATE INDEX idx_shopping_list_items_list ON shopping_list_items(shopping_list_id);
+
+-- auto 未购项按 (清单, 食材) 唯一, 支持重算时 upsert; manual 项不受此约束(见下)
+-- 已购 auto 是冻结的历史事实, 移出索引管辖(is_purchased=FALSE), 重算保留已购
 CREATE UNIQUE INDEX idx_shopping_list_items_auto_dedup
     ON shopping_list_items(shopping_list_id, ingredient_id)
     WHERE source = 'auto' AND ingredient_id IS NOT NULL AND is_purchased = FALSE;
--- 主查询路径: 加载某清单的全部项(manual + auto + 已购); Postgres 不为 FK 自动建索引
-CREATE INDEX idx_shopping_list_items_list ON shopping_list_items(shopping_list_id);
 ```
 
 ---
