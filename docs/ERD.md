@@ -911,4 +911,4 @@ CREATE INDEX idx_ai_logs_cost ON ai_generation_logs(user_id, created_at) WHERE s
 
 ---
 
-*Last updated: 2026-06-13 — Week 2, ingredients 表对齐 D1–D4（营养四宏量改 nullable、删 fiber、energy 取值规则入档）*
+*Last updated: 2026-06-13 — Week 2, ingredients 表对齐 D1–D4（营养四宏量改 nullable、删 fiber、energy 取值规则入档）*  
