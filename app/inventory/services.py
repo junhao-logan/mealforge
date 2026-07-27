@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from app.recipes.models import RecipeIngredient
 from app.meal_plans.models import MealPlanEntry
+from app.meal_plans.services import line_demand   # I13 需求公式(单一真相源)
 
 from app.core.config import get_settings
 
@@ -92,7 +93,7 @@ async def deduct_for_entry(
     shortfalls: list[dict] = []
 
     for ri in recipe_ingredients:
-        needed = ri.quantity_grams * entry.servings   # I13: 直接乘, 不除
+        needed = line_demand(ri, entry)   # I13 需求公式(见 meal_plans.services)
 
         # 2) 取该食材的可用批次, FEFO 序(与 list 展示同序)
         batch_stmt = (
