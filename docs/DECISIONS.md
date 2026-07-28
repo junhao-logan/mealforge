@@ -256,23 +256,38 @@
 - `manual` 项可为纯文本，**不必关联 `ingredient_id`**（非食材不进 ingredients 表）
 - 添加物品的交互：选已有食材 / 创建新食材（填营养）/ 创建非食材（纯文本）
 
-### I11 — 用户自建内容（ingredient / recipe / variant）⏳ Week 6
+### I11 — 用户自建内容（ingredient / recipe）⏳ Week 6
 
-**Week 6 实现：私有创建**
+**Week 6 MVP：仅私有创建 + 可见性过滤**
 
-- `created_by_user_id`：`BigInteger` → 改 **UUID + FK → users.id**（清 Week 2 的类型债）
+- `created_by_user_id`：`BigInteger` → 改 **UUID + FK → users.id**（清 Week 2 的类型债 #5）
 - 新增 `visibility` 字段：`'private'`（默认）/ `'global'`
   —— **独立于 `source`**：`source` 是"哪来的"（usda/system/user），`visibility` 是"谁能看"
 - 查询过滤：用户只见「自己私有的 + `visibility='global'` 的」
-- `ingredients` 已有 `source='user'` 可复用；recipe / variant 同加两字段
+  → `WHERE visibility='global' OR created_by_user_id = <me>`
+- 加在 **ingredient + recipe 两级**（不加 variant）：variant 可见性天然继承其 recipe，
+  现实无独立控制需求
+- **决策 A：`recipes.is_public` 收敛进 `visibility`**（True→global / False→private），删 is_public，
+  统一一个概念，与 ingredient 一致
+- 数据回填：现有 USDA 食材、系统菜谱是共享参考数据 → `visibility='global'`
+  （否则加完字段默认 private，用户看不见已有食材，直接崩）
 
-**愿景，暂不实现（记录设计意图）**
+**明确不在本次 MVP（依赖尚不存在的"公开菜谱"功能，记录设计意图）**
 
-- 申请转全局：`private → pending_review → global / rejected` 状态机
-  （可直接扩展 `visibility` 的值域，不需改表 —— 字段预留、值渐进）
-- 审核工作流：审核者角色、审核队列、批准/驳回（附理由）
-- **判断**：UGC 内容治理属平台成熟期功能。单人开发无法验证"提交者 vs 审核员"两方流程，
-  投入产出比低于库存一致性等核心能力。MVP 只做私有创建，预留字段与路径。
+以下三层均依赖"公开菜谱浏览/分享"流程（当前 `is_public` 只是字段，无真正公开流程），
+待做 UGC / 公开分享迭代（Week 8+ 或专门迭代）时统一设计：
+
+1. **公开菜谱"带出"其引用的私有食材**（核心修正，否则公开菜谱会坏）：
+   菜谱一旦 global，其引用的私有食材必须对查看者**可读**（显示名/算营养），但标注"私人创建"。
+   → 食材可见性不能只看自身行，需考虑"是否被某个 global 菜谱引用"（JOIN 引用关系）。
+   → 这推翻了纯内容级 `WHERE visibility='global'` 的简单规则。
+2. **私有食材申请转公开**：`private → pending_review → global / rejected` 状态机
+   （直接扩展 `visibility` 值域，不需改表 —— 字段预留、值渐进）+ 审核工作流
+3. **公开时 AI/搜索去重**：用户公开菜谱时，AI 对比私有食材与现有公开食材库
+   （或用户搜索公开食材），提示"保留私有版 or 替换为公开版"，避免重复建"腐乳"
+
+- **判断**：第 1 层依赖公开菜谱功能；第 2/3 层属平台成熟期（审核治理 + AI 去重）。
+  单人开发 MVP 只做私有创建 + 过滤，预留 `visibility` 值域与演进路径。
 
 ### I13 — `entry.servings` = 配方倍数 ✅ 语义定案
 
