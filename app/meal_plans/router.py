@@ -17,7 +17,9 @@ from app.meal_plans.schemas import (
 from app.meal_plans.services import meal_type_sort_key
 
 from app.nutrition.models import UserNutritionGoal
-from app.meal_plans.schemas import QuickLogCreate, DailySummaryRead, EntryCompleteRead, ShortfallItem
+from app.meal_plans.schemas import (
+    QuickLogCreate, DailySummaryRead, EntryCompleteRead, ShortfallItem, MacroSummary,
+)
 from app.meal_plans.services import (
     get_or_create_default_plan, expand_plan_range, meal_type_sort_key,  # meal_type_sort_key 已import则不重复
 )
