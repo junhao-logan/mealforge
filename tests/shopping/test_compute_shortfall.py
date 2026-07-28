@@ -6,8 +6,14 @@ import pytest
 
 from app.shopping.services import compute_shortfall
 from tests.factories import (
-    TODAY, WEEK_END, make_entry, make_ingredient, make_plan,
-    make_stock, make_user, make_variant,
+    TODAY,
+    WEEK_END,
+    make_entry,
+    make_ingredient,
+    make_plan,
+    make_stock,
+    make_user,
+    make_variant,
 )
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")

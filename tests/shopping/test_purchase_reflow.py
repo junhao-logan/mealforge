@@ -8,7 +8,10 @@ from app.inventory.models import InventoryItem, InventoryTransaction
 from app.shopping.schemas import ShoppingItemCreate
 from app.shopping.services import add_manual_item, mark_item_purchased
 from tests.factories import (
-    make_ingredient, make_shopping_item, make_shopping_list, make_user,
+    make_ingredient,
+    make_shopping_item,
+    make_shopping_list,
+    make_user,
 )
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")

@@ -87,6 +87,7 @@ async def make_shopping_item(
     needed_grams=None, add_to_inventory=True,
 ):
     from decimal import Decimal as _D
+
     from app.shopping.models import ShoppingListItem
     item = ShoppingListItem(
         shopping_list_id=sl.id,

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from sqlalchemy import delete, func, select
@@ -12,7 +12,7 @@ from app.inventory.models import InventoryItem
 from app.inventory.schemas import InventoryItemCreate
 from app.inventory.services import create_inventory_item
 from app.meal_plans.models import MealPlan, MealPlanEntry
-from app.meal_plans.services import line_demand   # I13 需求公式(单一真相源)
+from app.meal_plans.services import line_demand  # I13 需求公式(单一真相源)
 from app.recipes.models import RecipeIngredient
 from app.shopping.models import ShoppingList, ShoppingListItem
 
@@ -184,7 +184,7 @@ async def mark_item_purchased(
     调用方负责 commit。Week 5/6 输入即克, purchased_grams = purchased_amount。
     """
     item.is_purchased = True
-    item.purchased_at = datetime.now(timezone.utc)
+    item.purchased_at = datetime.now(UTC)
     if purchased_amount is not None:
         item.purchased_amount = purchased_amount
         item.purchased_unit = purchased_unit

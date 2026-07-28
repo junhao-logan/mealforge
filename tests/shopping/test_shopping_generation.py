@@ -4,11 +4,17 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.shopping.models import ShoppingList, ShoppingListItem
+from app.shopping.models import ShoppingListItem
 from app.shopping.services import generate_shopping_list, regenerate_auto_items
 from tests.factories import (
-    TODAY, WEEK_END, make_entry, make_ingredient, make_plan,
-    make_stock, make_user, make_variant,
+    TODAY,
+    WEEK_END,
+    make_entry,
+    make_ingredient,
+    make_plan,
+    make_stock,
+    make_user,
+    make_variant,
 )
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
