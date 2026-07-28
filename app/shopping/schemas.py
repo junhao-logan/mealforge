@@ -66,3 +66,26 @@ class ShoppingListListItem(BaseModel):
     forecast_start: date | None
     forecast_end: date | None
     status: str
+
+
+class ShoppingItemCreate(BaseModel):
+    """手动加一条采购项(食材项 或 纯文本项如"厨房纸")。"""
+    ingredient_id: int | None = None
+    item_name: str | None = Field(default=None, max_length=100)
+    needed_grams: Decimal | None = Field(default=None, gt=0)
+    add_to_inventory: bool = True
+    category_override: str | None = Field(default=None, max_length=50)
+    notes: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _identity(self):
+        # 与 DB 的 ck_..._has_identity 对齐: 至少有食材或文本名
+        if self.ingredient_id is None and self.item_name is None:
+            raise ValueError("需提供 ingredient_id 或 item_name")
+        return self
+
+
+class ShoppingItemPurchase(BaseModel):
+    """打勾购买。入库项需填实际购买量(→ I9 回流)。"""
+    purchased_amount: Decimal | None = Field(default=None, gt=0)
+    purchased_unit: str = Field(default="g", max_length=20)

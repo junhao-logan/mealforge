@@ -7,13 +7,21 @@ from sqlalchemy.orm import selectinload
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
 from app.meal_plans.models import MealPlan
-from app.shopping.models import ShoppingList
+from app.shopping.models import ShoppingList, ShoppingListItem
 from app.shopping.schemas import (
+    ShoppingItemCreate,
+    ShoppingItemPurchase,
     ShoppingListGenerate,
+    ShoppingListItemRead,
     ShoppingListListItem,
     ShoppingListRead,
 )
-from app.shopping.services import generate_shopping_list, regenerate_auto_items
+from app.shopping.services import (
+    add_manual_item,
+    generate_shopping_list,
+    mark_item_purchased,
+    regenerate_auto_items,
+)
 from app.users.models import User
 
 router = APIRouter(prefix="/shopping-lists", tags=["shopping"])
@@ -103,3 +111,57 @@ async def delete_shopping_list(
     sl = await _get_owned_list(db, list_id, user)
     await db.delete(sl)   # 条目走 CASCADE
     await db.commit()
+
+
+async def _get_owned_item(
+    db: AsyncSession, list_id: int, item_id: int, user: User
+) -> ShoppingListItem:
+    """取条目并校验归属(经清单关联 user)。"""
+    sl = await _get_owned_list(db, list_id, user)
+    item = await db.get(ShoppingListItem, item_id)
+    if item is None or item.shopping_list_id != sl.id:
+        raise HTTPException(404, f"采购项 id={item_id} 不存在")
+    return item
+
+
+@router.post("/{list_id}/items", response_model=ShoppingListItemRead, status_code=201)
+async def add_item(
+    list_id: int,
+    payload: ShoppingItemCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ShoppingListItem:
+    """手动加一条采购项(食材项或纯文本项)。"""
+    sl = await _get_owned_list(db, list_id, user)
+    item = await add_manual_item(db, sl, payload)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
+@router.patch(
+    "/{list_id}/items/{item_id}/purchase", response_model=ShoppingListItemRead
+)
+async def purchase_item(
+    list_id: int,
+    item_id: int,
+    payload: ShoppingItemPurchase,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ShoppingListItem:
+    """打勾购买 → 入库项回流建批次(I9)。"""
+    item = await _get_owned_item(db, list_id, item_id, user)
+    if item.is_purchased:
+        raise HTTPException(400, "该采购项已购买")
+    # 入库项必须填实际购买量, 否则无法建批次
+    if item.add_to_inventory and payload.purchased_amount is None:
+        raise HTTPException(422, "入库项需填 purchased_amount(实际购买量)")
+
+    await mark_item_purchased(
+        db, item, user.id,
+        purchased_amount=payload.purchased_amount,
+        purchased_unit=payload.purchased_unit,
+    )
+    await db.commit()
+    await db.refresh(item)
+    return item

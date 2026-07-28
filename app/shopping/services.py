@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.inventory.models import InventoryItem
+from app.inventory.schemas import InventoryItemCreate
+from app.inventory.services import create_inventory_item
 from app.meal_plans.models import MealPlan, MealPlanEntry
 from app.meal_plans.services import line_demand   # I13 需求公式(单一真相源)
 from app.recipes.models import RecipeIngredient
@@ -148,3 +150,60 @@ async def regenerate_auto_items(db: AsyncSession, sl: ShoppingList) -> ShoppingL
     )
     await _materialize_auto_items(db, sl)
     return sl
+
+
+async def add_manual_item(
+    db: AsyncSession, sl: ShoppingList, data
+) -> ShoppingListItem:
+    """往清单加一条 manual 条目(食材项或纯文本项)。调用方 commit。"""
+    item = ShoppingListItem(
+        shopping_list_id=sl.id,
+        ingredient_id=data.ingredient_id,
+        item_name=data.item_name,
+        source="manual",
+        needed_grams=data.needed_grams,
+        add_to_inventory=data.add_to_inventory,
+        category_override=data.category_override,
+        notes=data.notes,
+    )
+    db.add(item)
+    await db.flush()
+    return item
+
+
+async def mark_item_purchased(
+    db: AsyncSession,
+    item: ShoppingListItem,
+    user_id,
+    purchased_amount: Decimal | None = None,
+    purchased_unit: str = "g",
+) -> ShoppingListItem:
+    """打勾购买: 标记已购 + (若入库项)回流建库存批次(I9)。
+
+    回流复用 inventory.create_inventory_item(建批次 + purchase 流水), 同事务原子完成;
+    调用方负责 commit。Week 5/6 输入即克, purchased_grams = purchased_amount。
+    """
+    item.is_purchased = True
+    item.purchased_at = datetime.now(timezone.utc)
+    if purchased_amount is not None:
+        item.purchased_amount = purchased_amount
+        item.purchased_unit = purchased_unit
+        item.purchased_grams = purchased_amount   # 输入即克(Week 5/6)
+
+    # 回流入库: 仅"入库项 + 关联食材 + 填了购买量"三者齐备时
+    if (
+        item.add_to_inventory
+        and item.ingredient_id is not None
+        and purchased_amount is not None
+    ):
+        await create_inventory_item(
+            db, user_id,
+            InventoryItemCreate(
+                ingredient_id=item.ingredient_id,
+                input_amount=purchased_amount,
+                input_unit=purchased_unit,
+                purchased_at=date.today(),
+            ),
+        )
+    await db.flush()
+    return item
