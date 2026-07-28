@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # 起一个 Postgres 服务容器, 供测试连接(等价你本地的 docker compose postgres)
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mealforge
+          POSTGRES_PASSWORD: mealforge
+          POSTGRES_DB: mealforge_test
+        ports:
+          - 5432:5432
+        # 等 Postgres 就绪再跑测试, 否则连接会失败
+        options: >-
+          --health-cmd "pg_isready -U mealforge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # conftest 读这个连测试库; CLERK_ISSUER 是 config 必填项(测试用占位)
+      TEST_DATABASE_URL: postgresql+asyncpg://mealforge:mealforge@localhost:5432/mealforge_test
+      DATABASE_URL: postgresql+asyncpg://mealforge:mealforge@localhost:5432/mealforge_test
+      CLERK_ISSUER: https://ci.placeholder.test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+
+      - name: Lint (ruff)
+        # 暂限定于已清理的模块; 全仓 lint 欠账清理后再扩大范围
+        run: uv run ruff check app/shopping tests
+
+      - name: Run tests
+        run: uv run pytest tests/ -v
