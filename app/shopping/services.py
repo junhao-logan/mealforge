@@ -19,21 +19,18 @@ from app.shopping.models import ShoppingList, ShoppingListItem
 _CENT = Decimal("0.01")   # 需求量化精度, 对齐 needed_grams 的 Numeric(10,2)
 
 
-async def compute_shortfall(
+async def _demand_and_stock(
     db: AsyncSession, user_id, start: date, end: date
-) -> list[dict]:
-    """采购缺口(I7) = 窗口内未完成餐的需求 − 当前库存, 按食材聚合。
+) -> tuple[dict[int, Decimal], dict[int, Decimal]]:
+    """窗口内未完成餐的食材需求 + 当前库存, 各按食材聚合(克)。
 
-    · 只算 is_completed=false 的 entry: 已完成餐 Week 5 已扣库存, 当前库存已
-      反映其消耗; 再计入需求会双重计数(D2)。
-    · scheduled_date ∈ [start, end]: 过去漏做的餐(日期已过)自动排除, 不进采购。
-    · 纯只读聚合: 只要净缺口, 不做 FEFO/不锁行/不写流水(与 deduct 的分工不同)。
-    · 3 条 query, 与 entry 数无关(避免 per-entry N+1)。
-    返回: [{"ingredient_id": int, "shortfall_grams": Decimal}, ...] 仅净缺口 > 0,
-    按 ingredient_id 升序(确定性输出)。
+    compute_shortfall(采购缺口) 与 compute_preview(库存预扣视图 I6) 的共享计算核。
+    · 只算 is_completed=false 的 entry(已完成餐已扣库存, 再算需求会双重计数 D2)
+    · scheduled_date ∈ [start, end](过期漏做餐排除)
+    · 纯只读聚合, 无 N+1: JOIN 过滤用户 / IN 批量拉配料 / SUM 聚合库存
+    返回 (demand, stock), 均为 {ingredient_id: grams}。
     """
-    # ── query 1: 窗口内未完成 entry ──
-    # entry 上无 user_id(在 meal_plans 上), 故 JOIN meal_plans 过滤归属
+    # ── 窗口内未完成 entry(entry 无 user_id, JOIN meal_plans 过滤归属) ──
     entries_stmt = (
         select(MealPlanEntry)
         .join(MealPlan, MealPlanEntry.meal_plan_id == MealPlan.id)
@@ -45,19 +42,23 @@ async def compute_shortfall(
         )
     )
     entries = list((await db.execute(entries_stmt)).scalars().all())
-    if not entries:
-        return []   # 无待做餐 → 无缺口, 省掉后两条 query
 
-    # ── query 2: 这批 entry 涉及的所有配料(一条 IN 批量拉) ──
-    variant_ids = {e.recipe_variant_id for e in entries}
-    ri_stmt = select(RecipeIngredient).where(
-        RecipeIngredient.recipe_variant_id.in_(variant_ids)
-    )
-    ri_by_variant: dict[int, list[RecipeIngredient]] = defaultdict(list)
-    for ri in (await db.execute(ri_stmt)).scalars().all():
-        ri_by_variant[ri.recipe_variant_id].append(ri)
+    demand: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
+    if entries:
+        # 涉及的所有配料(一条 IN 批量拉), 建 variant → [配料] 映射
+        variant_ids = {e.recipe_variant_id for e in entries}
+        ri_stmt = select(RecipeIngredient).where(
+            RecipeIngredient.recipe_variant_id.in_(variant_ids)
+        )
+        ri_by_variant: dict[int, list[RecipeIngredient]] = defaultdict(list)
+        for ri in (await db.execute(ri_stmt)).scalars().all():
+            ri_by_variant[ri.recipe_variant_id].append(ri)
+        # 聚合需求: 同一 variant 可被多餐用, 各乘各的份数
+        for entry in entries:
+            for ri in ri_by_variant.get(entry.recipe_variant_id, ()):
+                demand[ri.ingredient_id] += line_demand(ri, entry)
 
-    # ── query 3: 当前库存按食材聚合(净值, 不需批次/FEFO) ──
+    # ── 当前库存按食材聚合(净值, 不需批次/FEFO) ──
     stock_stmt = (
         select(InventoryItem.ingredient_id, func.sum(InventoryItem.quantity_grams))
         .where(InventoryItem.user_id == user_id)
@@ -66,18 +67,22 @@ async def compute_shortfall(
     stock: dict[int, Decimal] = {
         ing_id: total for ing_id, total in (await db.execute(stock_stmt)).all()
     }
+    return demand, stock
 
-    # ── 聚合需求: Σ line_demand, 按食材累加(同一 variant 可被多餐用, 各乘各的份数) ──
-    demand: dict[int, Decimal] = defaultdict(lambda: Decimal("0"))
-    for entry in entries:
-        for ri in ri_by_variant.get(entry.recipe_variant_id, ()):
-            demand[ri.ingredient_id] += line_demand(ri, entry)
 
-    # ── 净缺口: 需求 − 库存, 仅留正值 ──
+async def compute_shortfall(
+    db: AsyncSession, user_id, start: date, end: date
+) -> list[dict]:
+    """采购缺口(I7) = 窗口内未完成餐需求 − 当前库存, 仅留净缺口 > 0。
+
+    返回 [{"ingredient_id", "shortfall_grams"}], 按 ingredient_id 升序。
+    """
+    demand, stock = await _demand_and_stock(db, user_id, start, end)
+
     shortfalls: list[dict] = []
     for ingredient_id, needed in demand.items():
-        # 量化到 0.01g 再比: 需求最多 4 位小数(8,2 × 5,2), 库存是 2 位,
-        # 不量化会冒出 0.005g 这类无意义的微缺口
+        # 量化到 0.01g 再比: 需求最多 4 位小数(8,2 × 5,2), 库存 2 位,
+        # 不量化会冒出 0.005g 这类无意义微缺口
         gap = needed.quantize(_CENT) - stock.get(ingredient_id, Decimal("0"))
         if gap > 0:
             shortfalls.append(
@@ -86,6 +91,33 @@ async def compute_shortfall(
 
     shortfalls.sort(key=lambda s: s["ingredient_id"])
     return shortfalls
+
+
+async def compute_preview(
+    db: AsyncSession, user_id, start: date, end: date
+) -> list[dict]:
+    """库存预扣视图(I6): 每个有库存或有需求的食材, 实际 / 需求 / 预计剩余。
+
+    预计剩余 = 实际库存 − 窗口需求, **可负**(负 = 排的饭会缺这么多 → 驱动采购)。
+    绝不真扣库存: 纯读时计算的视图, 不落库。
+    返回 [{"ingredient_id", "actual_grams", "demand_grams",
+          "projected_remaining_grams"}], 按 ingredient_id 升序。
+    """
+    demand, stock = await _demand_and_stock(db, user_id, start, end)
+
+    rows: list[dict] = []
+    for ingredient_id in set(demand) | set(stock):
+        actual = stock.get(ingredient_id, Decimal("0"))
+        need = demand.get(ingredient_id, Decimal("0")).quantize(_CENT)
+        rows.append({
+            "ingredient_id": ingredient_id,
+            "actual_grams": actual,
+            "demand_grams": need,
+            "projected_remaining_grams": actual - need,   # 可负 = 会缺
+        })
+
+    rows.sort(key=lambda r: r["ingredient_id"])
+    return rows
 
 
 async def _materialize_auto_items(db: AsyncSession, sl: ShoppingList) -> None:

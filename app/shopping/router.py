@@ -1,5 +1,7 @@
 # app/shopping/router.py
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import date, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -9,6 +11,7 @@ from app.core.database import get_db
 from app.meal_plans.models import MealPlan
 from app.shopping.models import ShoppingList, ShoppingListItem
 from app.shopping.schemas import (
+    PreviewItem,
     ShoppingItemCreate,
     ShoppingItemPurchase,
     ShoppingListGenerate,
@@ -18,6 +21,7 @@ from app.shopping.schemas import (
 )
 from app.shopping.services import (
     add_manual_item,
+    compute_preview,
     generate_shopping_list,
     mark_item_purchased,
     regenerate_auto_items,
@@ -78,6 +82,26 @@ async def list_shopping_lists(
         .order_by(ShoppingList.created_at.desc())
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+@router.get("/preview", response_model=list[PreviewItem])
+async def inventory_preview(
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """库存预扣视图(I6): 实际 + 预计剩余(可负)。默认今天起 7 天窗口。
+
+    ⚠️ 必须定义在 GET /{list_id} 之前, 否则 "preview" 会被当成 list_id 匹配。
+    """
+    if start_date is None:
+        start_date = date.today()
+    if end_date is None:
+        end_date = start_date + timedelta(days=6)
+    if end_date < start_date:
+        raise HTTPException(422, "end_date 不能早于 start_date")
+    return await compute_preview(db, user.id, start_date, end_date)
 
 
 @router.get("/{list_id}", response_model=ShoppingListRead)

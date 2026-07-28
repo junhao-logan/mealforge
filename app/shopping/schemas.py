@@ -89,3 +89,11 @@ class ShoppingItemPurchase(BaseModel):
     """打勾购买。入库项需填实际购买量(→ I9 回流)。"""
     purchased_amount: Decimal | None = Field(default=None, gt=0)
     purchased_unit: str = Field(default="g", max_length=20)
+
+
+class PreviewItem(BaseModel):
+    """库存预扣视图一行(I6): 实际 / 需求 / 预计剩余(可负)。"""
+    ingredient_id: int
+    actual_grams: Decimal
+    demand_grams: Decimal
+    projected_remaining_grams: Decimal   # 负 = 排的饭会缺这么多
