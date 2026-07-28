@@ -5,15 +5,15 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.database import Base
+from app.ingredients import models as _ingredients  # noqa: F401
+from app.inventory import models as _inventory  # noqa: F401
+from app.meal_plans import models as _meal_plans  # noqa: F401
+from app.nutrition import models as _nutrition  # noqa: F401
+from app.recipes import models as _recipes  # noqa: F401
+from app.shopping import models as _shopping  # noqa: F401
 
 # import 全部 model 模块, 让 Base.metadata 收齐所有表(create_all 需要)
 from app.users import models as _users  # noqa: F401
-from app.ingredients import models as _ingredients  # noqa: F401
-from app.recipes import models as _recipes  # noqa: F401
-from app.nutrition import models as _nutrition  # noqa: F401
-from app.meal_plans import models as _meal_plans  # noqa: F401
-from app.inventory import models as _inventory  # noqa: F401
-from app.shopping import models as _shopping  # noqa: F401
 
 
 def _test_db_url() -> str:
@@ -51,3 +51,43 @@ async def db(_engine) -> AsyncSession:
         await session.close()
         await trans.rollback()
         await conn.close()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def api_client(_engine):
+    """HTTP 层测试客户端: 绕过 Clerk auth, 复用回滚事务。
+
+    端点内的 db.commit() 经 join_transaction_mode='create_savepoint' 只提交
+    savepoint, 外层事务结束仍整体回滚 → HTTP 测试也零残留。
+    返回 (client, session, user)。
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from app.auth.dependencies import get_current_user
+    from app.core.database import get_db
+    from app.main import app
+    from app.users.models import User
+
+    conn = await _engine.connect()
+    trans = await conn.begin()
+    session = AsyncSession(
+        bind=conn, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
+    user = User(clerk_user_id="api_test_user")
+    session.add(user)
+    await session.flush()
+
+    async def _override_db():
+        yield session
+
+    app.dependency_overrides[get_db] = _override_db
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client, session, user
+
+    app.dependency_overrides.clear()
+    await session.close()
+    await trans.rollback()
+    await conn.close()
