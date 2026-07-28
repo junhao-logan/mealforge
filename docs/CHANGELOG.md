@@ -472,3 +472,45 @@
 - 中文顿号混入代码 → SyntaxError
 
 **收尾**：删前端脚手架、清测试数据、决策集中化、8 债清 4 defer 4
+
+### Chat 14 — Week 6：智能采购清单（缺口 / 生成 / 回流 / CI）
+
+**日期**：2026-07-28
+**任务**：Week 6 智能采购 —— I7 缺口、I8 生成/重算、I9 回流、REST 端点、测试、CI
+
+> 注：编号 14 为估计；Week 5 的 CHANGELOG 条目疑似未归档，待补。
+
+**完成**：
+
+- **ShoppingList / ShoppingListItem 两表 + migration**：部分唯一索引 `WHERE source='auto' AND is_purchased=FALSE`（重算幂等 + 保留已购）、两个 CHECK（forecast_range / has_identity）、SET NULL（溯源）与 CASCADE（依附）分工
+- **I7 `compute_shortfall`**：未完成餐需求 − 库存，按食材聚合；3 条 query 无 N+1（JOIN 过滤用户 / IN 批量拉配料 / SUM 聚合库存）；只算未完成餐防双重计数；过期餐排除（D2）；量化到 0.01g 防微缺口
+- **I8 生成/重算**：`generate_shopping_list` 物化缺口为 auto 快照；`regenerate_auto_items` 删未购 auto、保留已购 + manual
+- **I9 `mark_item_purchased`**：打勾购买 → 复用 `create_inventory_item` 原子回流（建批次 + purchase 流水）；守卫：入库项必填购买量、拒重复购买
+- **I10 采购项属性**：add_to_inventory / item_name / source / category_override
+- **`line_demand` helper**：I13 公式抽为单一真相源，deduct 与 compute_shortfall 共用
+- **REST 端点**：清单 CRUD + regenerate + 加项 + 打勾购买
+- **测试基建 + 25 测试**：session 建 schema + 每测试事务回滚；HTTP 层 `join_transaction_mode='create_savepoint'` 回滚；`api_client` fixture 用 `dependency_overrides` 绕过 Clerk
+- **CI/CD**：GitHub Actions（postgres service + ruff + pytest）+ README 徽章
+- **修遗留 bug**：`meal_plans/router` 未 import `MacroSummary`（CI ruff F821 抓出，daily-summary 会 NameError）
+
+**关键决策（本次敲定）**：
+
+- 预测视界 `forecast_start/end` **落库**：重算沿用同一区间，清单语义边界稳定
+- 同食材 auto + manual **允许两行**：partial unique 只管未购 auto，保留来源信息，展示层归组
+- 重算**保留已购 auto**：已购是冻结的历史事实，未购才是活的预测（对齐 I6/I7 探索 vs 决策）
+- auto 项**物化快照**而非读时计算：采购清单是决策性、要稳定可打勾，不同于 I6 探索性实时视图
+
+**关键学习**：
+
+- SQLAlchemy `naming_convention` 会给 CHECK 加 `ck_<表>_` 前缀，`name=` 只传语义后缀（否则双前缀）
+- 部分唯一索引管辖范围要 = 重算变更范围（`is_purchased=FALSE`），否则保留已购时插新 auto 会撞唯一约束
+- 上 CI 首次 lint 即暴露历史欠账（88 项）+ 一个真 bug；B008（FastAPI Depends 默认值）是公认误报，全局忽略
+
+**遗留**：
+
+- I6 库存预扣视图、I11 用户自建内容未做（Week 6 范围内）
+- 全仓 lint 欠账 88 项待清（CI lint 暂限 `app/shopping tests`）
+- Week 5 CHANGELOG 条目待补归档
+
+**下一步**：
+Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成）；可选加覆盖率徽章
