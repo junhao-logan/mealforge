@@ -1,5 +1,5 @@
 # MealForge
-
+![CI](https://github.com/junhao-logan/mealforge/actions/workflows/ci.yml/badge.svg)
 AI-powered meal planning platform with inventory-aware recipe recommendations.
 
 Built end-to-end as a learning project to explore modern full-stack development with Python, React, and AI integration.
