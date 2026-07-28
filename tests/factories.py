@@ -72,3 +72,30 @@ async def make_stock(db, user, ing, grams) -> InventoryItem:
     db.add(it)
     await db.flush()
     return it
+
+
+async def make_shopping_list(db, user, start=TODAY, end=WEEK_END):
+    from app.shopping.models import ShoppingList
+    sl = ShoppingList(user_id=user.id, forecast_start=start, forecast_end=end, status="active")
+    db.add(sl)
+    await db.flush()
+    return sl
+
+
+async def make_shopping_item(
+    db, sl, *, ingredient=None, item_name=None, source="auto",
+    needed_grams=None, add_to_inventory=True,
+):
+    from decimal import Decimal as _D
+    from app.shopping.models import ShoppingListItem
+    item = ShoppingListItem(
+        shopping_list_id=sl.id,
+        ingredient_id=(ingredient.id if ingredient else None),
+        item_name=item_name,
+        source=source,
+        needed_grams=(_D(str(needed_grams)) if needed_grams is not None else None),
+        add_to_inventory=add_to_inventory,
+    )
+    db.add(item)
+    await db.flush()
+    return item
