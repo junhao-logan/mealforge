@@ -514,3 +514,36 @@
 
 **下一步**：
 Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成）；可选加覆盖率徽章
+
+### Chat 15 — Week 6 收尾：预扣视图（I6）+ 用户自建内容（I11）
+
+**日期**：2026-07-28
+**任务**：Week 6 最后两块 —— I6 库存预扣视图、I11 用户自建内容（ingredient + recipe）
+
+**完成**：
+
+- **I6 库存预扣视图**：抽 `_demand_and_stock` 共享计算核；`compute_preview` 返回每食材 实际/需求/预计剩余（可负=会缺）；`GET /shopping-lists/preview`（注册在 `/{list_id}` 前避免路由遮蔽）；`compute_shortfall` 重构复用该核（25 旧测试守护，行为不变）
+- **I11 用户自建内容（MVP，ingredient + recipe 两级）**：
+  - `created_by_user_id`：BigInteger → UUID + FK→users（清类型债 #5），手写迁移 + `USING NULL::uuid`（全列 NULL 已验证）
+  - 加 `visibility`(private/global)；数据回填现有共享数据为 global
+  - 决策 A：`recipes.is_public` 收敛进 `visibility`，删 is_public
+  - 查询过滤：`WHERE visibility='global' OR created_by=me`；创建端点固定 private/归属/source；别人私有按 id 直取返 404
+  - ingredient/recipe 列表端点加认证（原先无 auth）
+- 测试 25 → **41**（+I6 preview 5、+ingredient 可见性 6、+recipe 可见性 5）
+- CI lint 范围扩到 `app/ingredients`、`app/recipes`；顺带修 `recipes/services.py` 历史 lint 欠账
+
+**关键决策/学习**：
+
+- **I11 范围重定**：用户提出"公开菜谱应带出其引用的私有食材（标注私人创建）"，推翻了纯内容级 `visibility='global'` 过滤 —— 该场景依赖尚不存在的"公开菜谱"功能。故 MVP 只做私有创建 + 过滤，把"带出私有食材 / 审核转公开 / AI 去重"三层写进 DECISIONS 愿景
+- 决策 A：is_public 收敛进 visibility（单一概念）
+- 迁移验证三板斧：完整链 upgrade + downgrade 往返 + `alembic check` 漂移检测
+- 带索引的列改类型：PG 自动重建索引，alembic 无需显式处理（沙箱验证）
+
+**遗留**：
+
+- I11 愿景三层（依赖公开菜谱功能）
+- 全仓 lint 欠账：已清 shopping/ingredients/recipes/tests，其余模块待清后扩 CI 到全仓
+
+**下一步**：Week 7 AI 菜谱生成（项目核心亮点）
+
+**Week 6 状态：I6–I11 全部完成，智能采购彻底收官 ✅**

@@ -11,24 +11,24 @@
 - 批次模型 + FEFO 扣减 + 临期提醒 + 完整 CRUD，全部真 token 端到端验证
 - 修复 Week 4 路由顺序 bug（daily-summary 被遮蔽）
 
-### Week 6 — 智能采购 🟡 核心完成（I6 / I11 未做）
+### Week 6 — 智能采购 ✅ 完成
 已完成：
 - ShoppingList / ShoppingListItem 两表 + migration（部分唯一索引 `WHERE is_purchased=FALSE`、两个 CHECK、SET NULL/CASCADE 分工）
-- **I7** `compute_shortfall(db, user, start, end)`：未完成餐需求 − 库存；3 条 query 无 N+1；只算未完成餐（防双重计数）；过期餐排除（D2）
-- **I8** 生成/重算：`generate_shopping_list` 把缺口物化为 auto 快照；`regenerate_auto_items` 删未购 auto、保留已购 + manual
-- **I9** `mark_item_purchased`：打勾购买 → 复用 `create_inventory_item` 原子回流（建批次 + purchase 流水）
-- **I10** 采购项属性：`add_to_inventory` / `item_name` / `source`(auto/manual) / `category_override`
-- `line_demand` helper：I13 公式抽为单一真相源（deduct 与 compute_shortfall 共用）
-- REST 端点：`POST/GET/DELETE /shopping-lists`、`GET /{id}`、`POST /{id}/regenerate`、`POST /{id}/items`、`PATCH /{id}/items/{item_id}/purchase`
-- 测试基建 + **25 个测试**（缺口 9 / 生成 5 / 回流 5 / HTTP 6）：session 级建 schema + 每测试事务回滚；HTTP 层用 savepoint 回滚
+- **I7** `compute_shortfall`：未完成餐需求 − 库存；3 条 query 无 N+1；只算未完成餐（防双重计数）；过期餐排除（D2）
+- **I8** 生成/重算：`generate_shopping_list` 物化 auto 快照；`regenerate_auto_items` 删未购 auto、保留已购 + manual
+- **I9** `mark_item_purchased`：打勾购买 → 复用 `create_inventory_item` 原子回流
+- **I10** 采购项属性：add_to_inventory / item_name / source / category_override
+- **I6** `compute_preview` 库存预扣视图：实际 / 需求 / 预计剩余（可负 = 会缺）；抽 `_demand_and_stock` 与 compute_shortfall 共用；`GET /shopping-lists/preview`
+- **I11** 用户自建内容（MVP）：ingredient + recipe 加 `visibility`（private/global）+ `created_by_user_id` 改 UUID+FK（清债 #5）；查询过滤"global 或自己建的"；创建端点固定 private/归属；决策 A 收敛 recipes.is_public → visibility
+- `line_demand` helper（I13 单一真相源）
+- REST 端点：采购清单 CRUD + regenerate + 加项 + 打勾购买 + preview；ingredient/recipe 创建 + 可见性列表
+- **41 个测试**（缺口 9 / 生成 5 / 回流 5 / HTTP 6 / preview 5 / ingredient 可见性 6 / recipe 可见性 5）
 - **CI/CD**（GitHub Actions：postgres service + ruff + pytest）+ README 徽章
-- 修复遗留 bug：`meal_plans/router` 未 import `MacroSummary`（CI lint F821 抓出，daily-summary 会崩）
+- 修遗留 bug：`meal_plans/router` 未 import `MacroSummary`（CI lint F821 抓出）
 
-### 下一步 — Week 6 收尾 / Week 7
-- **I6** 库存预扣视图（实际 + 预计剩余，可负）—— 未做
-- **I11** 用户自建内容（ingredient/recipe/variant + visibility；清 `created_by_user_id` UUID 债）—— 未做
-- 全仓 lint 欠账清理（88 项：53×E501 / 23×I001 / 其余），清完把 CI lint 从 `app/shopping tests` 扩到全仓
-- **Week 7**：AI 菜谱生成
+### 下一步 — Week 7：AI 菜谱生成
+- 项目核心亮点：接 Anthropic API 生成菜谱
+- I11 愿景（公开菜谱带出私有食材 / 审核转公开 / AI 去重）依赖公开菜谱功能，留后续 UGC 迭代
 
 ### 项目基础信息
 
@@ -54,7 +54,7 @@
 - [~] **Week 3**: 营养目标与 TDEE（TDEE 计算 ✅ + 营养目标 CRUD ✅；每日营养汇总挪到 Week 4，依赖餐计划数据）
 - [x] **Week 4**: 餐食规划 v1（MealPlan/Entry + 计划 CRUD + quick-log + 每日营养汇总；**里程碑：自己可用 ✅ Phase 1 收官**）
 - [x] **Week 5**: 库存管理（批次 + FEFO 扣减 + 临期提醒 + CRUD，真 token 验证 ✅）
-- [~] **Week 6**: 智能采购清单（I7 缺口 / I8 生成重算 / I9 回流 / I10 属性 / REST 端点 / 25 测试 / CI ✅；I6 预扣视图、I11 自建内容未做）
+- [x] **Week 6**: 智能采购清单（I6–I11 全部完成 ✅：缺口/生成重算/回流/属性/预扣视图/用户自建内容 + REST 端点 + 41 测试 + CI）
 - [ ] **Week 7**: AI 菜谱生成
 - [ ] **Week 8**: AI 周计划 + 反向推荐（**里程碑：核心闭环完成**）
 - [ ] **Week 9**: 测试与性能优化
@@ -103,10 +103,9 @@
 - [ ] 食材别名（番茄 / 西红柿）暂不做，等用户反馈"搜不到"再加 ingredient_aliases 表
 - [ ] 多语言菜谱字段（name_i18n JSONB）暂不做
 - [ ] notes.rating 多维度评分（好吃 / 难度 / 性价比 / 健康）暂不做，等用户反馈
-- [ ] **全仓 lint 欠账**（Week 6 上 CI 时暴露）：88 项风格问题（53×E501 行太长 / 23×I001 import 未排序 / 6×F401 / 其余）。36 项可 `ruff --fix` 自动修，53×E501 需手动折行。清完把 CI lint 从 `app/shopping tests` 扩到全仓（`ruff check .`）
-- [ ] **I6 库存预扣视图**未做（Week 6 范围内）：实际 + 预计剩余（可负），实时算不落库，对齐 I7 探索性范围
-- [ ] **I11 用户自建内容**未做（Week 6 范围内）：ingredient/recipe/variant + visibility 字段；顺带清 `created_by_user_id` BigInteger→UUID 类型债（技术债 #5）
+- [ ] **全仓 lint 欠账**（上 CI 时暴露）：`app/shopping`、`app/ingredients`、`app/recipes`、`tests` 已清并纳入 CI lint；其余模块（meal_plans / inventory / users / auth / nutrition 等）仍有 E501/I001 等风格问题待清。清完把 CI lint 扩到全仓（`ruff check .`）
 - [ ] Week 6 输入即克简化：`purchased_grams = purchased_amount`（回流建批次沿用 Week 5 grams-only）；多单位换算（grams_per_unit）延后
+- [ ] I11 愿景（依赖尚不存在的"公开菜谱"功能，见 DECISIONS）：①公开菜谱带出其引用的私有食材 ②私有→审核→公开状态机 ③公开时 AI/搜索去重
 - [ ] Python 版本未锁定（uv 抓了 3.14.5）；加 `.python-version`，Week 11 部署前确认与 Railway/Fly 运行环境对齐
 - [ ] **真实 token 端到端验证延后**：Clerk dev 无前端时拿不到 session JWT（Account Portal 未激活、Dashboard 不导出 token）。Week 2+ 接 React 用 `getToken()` 时验「真 JWT→验签→JIT 写库」，确认返回 200 且 body 含 email（claim 透传）
 - [ ] **CLERK_ISSUER 取值待真 token 核对**：现填 `https://literate-koala-34.clerk.accounts.dev`（Frontend API/issuer）；但 Account Portal 域名是 `literate-koala-34.accounts.dev`（无 `.clerk`，不同域）。首次真 token 若 401，先查 token 的 `iss` claim 是否与 CLERK_ISSUER 一致
@@ -129,6 +128,9 @@
 
 ### 工程质量（Week 6 亮点）
 
+- **行级可见性权限模型（I11）**：`visibility`(private/global) + `created_by_user_id` 两个正交维度，查询层一句 `WHERE visibility='global' OR created_by=me` 实现"看得见共享的 + 自己建的"；列表/详情/搜索全部受约束，别人私有内容按 id 直取也返 404（不泄漏存在性）
+- **identity shadow 类型债清理**：`created_by_user_id` BigInteger→UUID+FK→users；手写迁移 + 数据回填（现有共享数据设 global，否则加字段后用户看不见）；downgrade 往返验证 + `alembic check` 漂移检测零差异
+- **同一计算核两种视图（I6/I7）**：抽 `_demand_and_stock`，采购缺口（需求−库存，留正）与预扣视图（库存−需求，可负）共用；single source of computation
 - **测试隔离用 per-test 事务回滚**：session 级建一次 schema（create_all），每个测试跑在事务里、结束回滚，测试间零残留。比每次 truncate/重建快，是生产级测试套件标准模式。HTTP 层测试用 `join_transaction_mode="create_savepoint"` 让端点内的 `commit()` 只提交 savepoint、外层仍整体回滚
 - **测试断言的是设计决策而非 happy path**：25 个测试里，"不双重计数已完成餐""不算过期餐（D2）""用户隔离（JOIN 过滤）""重算保留已购/刷新未购""回流原子性" 等把正确性契约钉成可回归断言
 - **引入 CI 静态检查即发现并修复一个未捕获的运行时 bug**：`meal_plans/router` 用了 `MacroSummary` 却未 import，daily-summary 端点会 `NameError` 崩溃；ruff F821 在首次 CI lint 时抓出
@@ -148,7 +150,7 @@
 
 ### 工程质量
 
-- 测试数：25（Week 6 起，真 Postgres + 事务回滚）；覆盖率：[待接 pytest-cov]
+- 测试数：41（Week 6，真 Postgres + 事务回滚）；覆盖率：[待接 pytest-cov]
 - CI/CD：GitHub Actions（postgres service + ruff + pytest），已上线
 
 ### 用户数据
