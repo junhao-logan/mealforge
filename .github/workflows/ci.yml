@@ -46,8 +46,8 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Lint (ruff)
-        # 暂限定于已清理的模块; 全仓 lint 欠账清理后再扩大范围
-        run: uv run ruff check app/shopping tests
+        # 已清理的模块; 全仓 lint 欠账清理后再扩到 ruff check .
+        run: uv run ruff check app/shopping app/ingredients tests
 
       - name: Run tests
         run: uv run pytest tests/ -v

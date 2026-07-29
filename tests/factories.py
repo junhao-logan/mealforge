@@ -20,8 +20,11 @@ async def make_user(db, clerk="u_main") -> User:
     return u
 
 
-async def make_ingredient(db, name) -> Ingredient:
-    ing = Ingredient(name=name, name_normalized=name)
+async def make_ingredient(db, name, visibility="global", created_by=None) -> Ingredient:
+    ing = Ingredient(
+        name=name, name_normalized=name,
+        visibility=visibility, created_by_user_id=created_by,
+    )
     db.add(ing)
     await db.flush()
     return ing

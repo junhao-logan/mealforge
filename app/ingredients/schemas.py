@@ -1,5 +1,6 @@
 from decimal import Decimal
-from pydantic import BaseModel, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class IngredientRead(BaseModel):
@@ -18,3 +19,20 @@ class IngredientRead(BaseModel):
     # 单位元数据: 前端展示"1 个 / 1 杯"时要用
     default_unit: str
     grams_per_unit: Decimal
+    # 可见性(I11): 'private'(自建, 仅自己可见) / 'global'(共享)
+    # 前端可据此打"私人创建"标签
+    visibility: str
+
+
+class IngredientCreate(BaseModel):
+    """用户自建食材(I11): 服务端固定 source='user'、visibility='private'、
+    created_by_user_id=当前用户; 这些不由客户端传。"""
+    name: str = Field(min_length=1, max_length=200)
+    category: str | None = Field(default=None, max_length=50)
+    per_100g_calories: Decimal | None = Field(default=None, ge=0)
+    per_100g_protein: Decimal | None = Field(default=None, ge=0)
+    per_100g_carbs: Decimal | None = Field(default=None, ge=0)
+    per_100g_fat: Decimal | None = Field(default=None, ge=0)
+    default_unit: str = Field(default="g", max_length=20)
+    grams_per_unit: Decimal = Field(default=Decimal("1.0"), gt=0)
+    shelf_life_days: int | None = Field(default=None, ge=0)

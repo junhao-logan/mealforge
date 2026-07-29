@@ -1,12 +1,14 @@
 # app/ingredients/models.py
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -14,9 +16,10 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import Base  
+from app.core.database import Base
 
 
 class Ingredient(Base):
@@ -50,8 +53,14 @@ class Ingredient(Base):
         String(20), nullable=False, server_default=text("'user'")
     )  # 'usda' / 'system' / 'user'
     usda_fdc_id: Mapped[str | None] = mapped_column(String(20))  # seed upsert key
-    # created_by_user_id: 留列不加 FK(users.id 是 UUID,类型对不上,MVP 此列不写入)
-    created_by_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    # 归属(I11): UUID FK->users, 删用户置空不销毁食材(SET NULL)。usda/system 为 NULL
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # 可见性(I11): 'private'(默认) / 'global'。与 source 正交(source=哪来的, visibility=谁能看)
+    visibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'private'")
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -67,6 +76,7 @@ class Ingredient(Base):
         Index("idx_ingredients_name_normalized", "name_normalized"),
         Index("idx_ingredients_category", "category"),
         Index("idx_ingredients_source", "source"),
+        Index("idx_ingredients_created_by", "created_by_user_id"),
         Index(
             "idx_ingredients_usda_fdc_id",
             "usda_fdc_id",

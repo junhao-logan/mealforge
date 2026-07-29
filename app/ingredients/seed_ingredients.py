@@ -105,6 +105,7 @@ def build_rows(manifest: dict[str, dict], nutrients: dict[str, dict]) -> list[di
             "default_unit": meta["default_unit"],
             "grams_per_unit": meta["grams_per_unit"],
             "source": "usda",                        # S1 子决策: 硬编码
+            "visibility": "global",                  # I11: USDA 为共享参考数据
             "usda_fdc_id": fdc_id,
             # shelf_life_days: 留 null (S1 子决策, Week 5 backfill)
         }
