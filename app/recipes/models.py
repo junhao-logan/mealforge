@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -14,7 +14,9 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -33,14 +35,17 @@ class Recipe(Base):
 
     # 来源追溯
     source: Mapped[str] = mapped_column(String(20), nullable=False)  # system/user/ai_generated
-    # ⚠️ created_by_user_id / ai_generation_log_id: 留列不加 FK
-    #   - users.id 是 UUID, 这里 BIGINT, 类型不匹配(同 ingredients 的处理)
-    #   - ai_generation_logs 表尚未建立
-    #   待类型对齐 / 目标表建好后再补 FK
-    created_by_user_id: Mapped[int | None] = mapped_column(BigInteger)
+    # 归属(I11): UUID FK->users, 删用户置空不销毁菜谱(SET NULL)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    # ⚠️ ai_generation_log_id: 留列不加 FK(ai_generation_logs 表尚未建立)
     ai_generation_log_id: Mapped[int | None] = mapped_column(BigInteger)
 
-    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 可见性(I11, 决策A: 收敛原 is_public): 'private'(默认) / 'global'
+    visibility: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default=text("'private'")
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -139,7 +144,7 @@ class RecipeIngredient(Base):
 
     variant: Mapped[RecipeVariant] = relationship(back_populates="ingredients")
     # 指向食材, 供营养聚合读 per-100g + 读取时拿食材名
-    ingredient: Mapped["Ingredient"] = relationship()
+    ingredient: Mapped[Ingredient] = relationship()
 
     __table_args__ = (
         Index("idx_recipe_ingredients_variant_id", "recipe_variant_id"),

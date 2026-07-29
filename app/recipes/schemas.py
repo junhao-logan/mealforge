@@ -3,7 +3,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ---------- 入参(创建用,Create 后缀) ----------
 
 class RecipeIngredientCreate(BaseModel):
@@ -70,7 +69,7 @@ class RecipeRead(BaseModel):
     description: str | None
     cuisine: str | None
     source: str
-    is_public: bool
+    visibility: str
     created_at: datetime
     variants: list[RecipeVariantRead]
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingredients.models import Ingredient
@@ -63,7 +63,6 @@ def compute_variant_nutrition(variant: RecipeVariant) -> None:
     variant.total_protein_g = sums["protein"]
     variant.total_carbs_g = sums["carbs"]
     variant.total_fat_g = sums["fat"]
-    from sqlalchemy import func as _func  # 局部 import 避免顶部杂乱
     # nutrition_computed_at 用 DB 时间, 这里用 Python now 也可; 简单起见标记已算
-    from datetime import datetime, timezone
-    variant.nutrition_computed_at = datetime.now(timezone.utc)
+    from datetime import datetime
+    variant.nutrition_computed_at = datetime.now(UTC)

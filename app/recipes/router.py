@@ -1,15 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth.dependencies import get_current_user
 from app.core.database import get_db
 from app.ingredients.models import Ingredient
-from app.recipes.models import Recipe, RecipeVariant, RecipeIngredient
+from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
 from app.recipes.schemas import (
-    RecipeCreate, RecipeRead, RecipeListItem,
+    RecipeCreate,
+    RecipeListItem,
+    RecipeRead,
 )
-from app.recipes.services import resolve_grams, compute_variant_nutrition
+from app.recipes.services import compute_variant_nutrition, resolve_grams
+from app.users.models import User
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
 
@@ -32,15 +36,17 @@ async def _load_full_recipe(db: AsyncSession, recipe_id: int) -> Recipe | None:
 @router.post("", response_model=RecipeRead, status_code=201)
 async def create_recipe(
     payload: RecipeCreate,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Recipe:
-    # 1. 建 Recipe(source 固定 'user'; MVP 无认证, created_by 暂空)
+    # 1. 建 Recipe(私有创建 I11: source='user', visibility='private', 归属=当前用户)
     recipe = Recipe(
         name=payload.name,
         description=payload.description,
         cuisine=payload.cuisine,
         source="user",
-        is_public=False,
+        visibility="private",
+        created_by_user_id=user.id,
     )
 
     # 2. 建第一个 Variant
@@ -86,22 +92,39 @@ async def create_recipe(
     return loaded
 
 
+def _visible_to(user: User):
+    """可见性条件(I11): global 的 + 自己建的。"""
+    return or_(
+        Recipe.visibility == "global",
+        Recipe.created_by_user_id == user.id,
+    )
+
+
 @router.get("", response_model=list[RecipeListItem])
 async def list_recipes(
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ) -> list[Recipe]:
-    stmt = select(Recipe).order_by(Recipe.id).offset(skip).limit(limit)
+    stmt = (
+        select(Recipe)
+        .where(_visible_to(user))
+        .order_by(Recipe.id).offset(skip).limit(limit)
+    )
     return list((await db.execute(stmt)).scalars().all())
 
 
 @router.get("/{recipe_id}", response_model=RecipeRead)
 async def get_recipe(
     recipe_id: int,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Recipe:
     recipe = await _load_full_recipe(db, recipe_id)
-    if recipe is None:
+    # 不存在, 或既非 global 又非本人所建 → 一律 404(不泄漏存在性)
+    if recipe is None or (
+        recipe.visibility != "global" and recipe.created_by_user_id != user.id
+    ):
         raise HTTPException(404, f"菜谱 id={recipe_id} 不存在")
     return recipe

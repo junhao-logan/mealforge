@@ -103,3 +103,13 @@ async def make_shopping_item(
     db.add(item)
     await db.flush()
     return item
+
+async def make_recipe(db, name, visibility="global", created_by=None, source="user"):
+    from app.recipes.models import Recipe
+    r = Recipe(
+        name=name, source=source,
+        visibility=visibility, created_by_user_id=created_by,
+    )
+    db.add(r)
+    await db.flush()
+    return r
