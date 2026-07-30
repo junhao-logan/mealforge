@@ -44,7 +44,9 @@ async def db(_engine) -> AsyncSession:
     """每测试一个事务, 结束回滚 → 零残留、测试间隔离。种子数据用 flush(不 commit)。"""
     conn = await _engine.connect()
     trans = await conn.begin()
-    session = AsyncSession(bind=conn, expire_on_commit=False)
+    session = AsyncSession(
+        bind=conn, join_transaction_mode="create_savepoint", expire_on_commit=False
+    )
     try:
         yield session
     finally:

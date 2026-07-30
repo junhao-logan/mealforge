@@ -39,8 +39,10 @@ class Recipe(Base):
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
     )
-    # ⚠️ ai_generation_log_id: 留列不加 FK(ai_generation_logs 表尚未建立)
-    ai_generation_log_id: Mapped[int | None] = mapped_column(BigInteger)
+    # 由哪次 AI 生成建立(反向: 日志->菜谱在 ai_generation_logs.created_recipe_id)
+    ai_generation_log_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ai_generation_logs.id", ondelete="SET NULL")
+    )
 
     # 可见性(I11, 决策A: 收敛原 is_public): 'private'(默认) / 'global'
     visibility: Mapped[str] = mapped_column(

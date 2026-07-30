@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.7",
     "redis>=5.2",
     "pyjwt[crypto]>=2.13.0",
+    "anthropic>=0.40",
 ]
 
 [dependency-groups]

@@ -3,6 +3,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.ai.schemas import RecipeGenerateRequest
+from app.ai.services import (
+    AiError,
+    EmptyInventoryError,
+    RecipeValidationError,
+    generate_recipe,
+)
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
 from app.ingredients.models import Ingredient
@@ -98,6 +105,26 @@ def _visible_to(user: User):
         Recipe.visibility == "global",
         Recipe.created_by_user_id == user.id,
     )
+
+
+@router.post("/generate", response_model=RecipeRead, status_code=201)
+async def generate_recipe_endpoint(
+    payload: RecipeGenerateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Recipe:
+    """AI 从库存生成菜谱(Week 7)。空库存 400;AI 侧失败 502。"""
+    try:
+        return await generate_recipe(
+            db, user,
+            free_text=payload.free_text, cuisine=payload.cuisine,
+            goal=payload.goal, servings=payload.servings,
+        )
+    except EmptyInventoryError as e:
+        raise HTTPException(400, str(e)) from e
+    except (AiError, RecipeValidationError) as e:
+        # 上游 AI 失败或返回无效结果 —— 已记 failed 日志; 对客户端报 502
+        raise HTTPException(502, "AI 生成暂时不可用, 请稍后重试") from e
 
 
 @router.get("", response_model=list[RecipeListItem])

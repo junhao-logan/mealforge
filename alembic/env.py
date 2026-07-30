@@ -17,6 +17,7 @@ from app.nutrition import models as _nutrition_models  # noqa: F401
 from app.meal_plans import models as _meal_plans_models  # noqa: F401
 from app.inventory import models as _inventory_models  # noqa: F401   
 from app.shopping import models as _shopping_models  # noqa: F401
+from app.ai import models as _ai_models  # noqa: F401
 
 
 config = context.config
