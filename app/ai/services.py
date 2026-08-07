@@ -161,7 +161,7 @@ async def generate_recipe(
         catalog, free_text=free_text, cuisine=cuisine,
         goal=goal, servings=servings,
     )
-    model = get_settings().anthropic_model
+    model = get_settings().gemini_model
 
     try:
         result = await generate_recipe_raw(prompt)   # 调 AI(测试 mock)

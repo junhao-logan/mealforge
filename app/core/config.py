@@ -38,12 +38,13 @@ class Settings(BaseSettings):
     # --- Inventory ---
     inventory_expiry_warning_days: int = 3  # 距过期 ≤N 天标记为临期(黄色, I4)
 
-    # --- AI (Anthropic) ---
-    # key 可空: mock 测试不需要; 真调用时由 .env 提供
-    anthropic_api_key: str = ""
-    # 模型串号放配置, 换模型/换档只改这里(不硬编码)
-    anthropic_model: str = "claude-haiku-4-5-20251001"
-    anthropic_max_tokens: int = 2048   # 单次生成输出上限(一个菜谱够用)
+    # --- AI (Gemini) ---
+    # 供应商封装在 app/ai/client.py; 换供应商只改 client + 这几行配置。
+    # key 可空: mock 测试不需要; 真调用时由 .env 提供(Google AI Studio 免费层)
+    gemini_api_key: str = ""
+    # 模型串号放配置, 换模型/换档只改这里。免费层: gemini-2.5-flash / flash-lite
+    gemini_model: str = "gemini-2.5-flash"
+    ai_max_tokens: int = 2048   # 单次生成输出上限(一个菜谱够用)
 
 @lru_cache
 def get_settings() -> Settings:
