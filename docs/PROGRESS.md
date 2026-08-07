@@ -26,9 +26,20 @@
 - **CI/CD**（GitHub Actions：postgres service + ruff + pytest）+ README 徽章
 - 修遗留 bug：`meal_plans/router` 未 import `MacroSummary`（CI lint F821 抓出）
 
-### 下一步 — Week 7：AI 菜谱生成
-- 项目核心亮点：接 Anthropic API 生成菜谱
-- I11 愿景（公开菜谱带出私有食材 / 审核转公开 / AI 去重）依赖公开菜谱功能，留后续 UGC 迭代
+### Week 7 — AI 菜谱生成 ✅ 完成（真实端到端跑通）
+- `ai_generation_logs` 表 + `AiGenerationLog` 模型（成功/失败都记, kind 预留 meal_plan）
+- **grounding**：库存食材清单喂进 prompt, AI 只能用清单内 ingredient_id；代码 `_validate` 硬校验兜底防幻觉
+- **结构化输出**：`save_recipe` tool（function calling）强制结构化
+- `app/ai/`：client(供应商 adapter) / prompts(纯函数) / recipe_tool(中立 schema) / services(核心) / schemas
+- `POST /recipes/generate`：空库存 400 / AI 失败 502；落库 source=ai_generated + private + 归属 + 营养聚合
+- **供应商 Anthropic → Gemini**：只改 client.py + 配置, 49 测试零改动（adapter 层实证）
+- **49 个测试**（+AI 5 service + 3 endpoint）, 全 mock 不真调 API
+- **真实验证**：Gemini 免费层生成「洋葱滑蛋炒鸡胸西兰花」, grounding 全部用库存食材 id, 营养自动算, $0
+
+### 下一步 — Week 8：AI 周计划 + 反向推荐（里程碑：核心闭环完成）
+- AI 生成整周计划
+- 反向推荐（库存 → 能做什么）
+- CI lint 已含 app/ai；config 默认模型已改 gemini-3.1-flash-lite
 
 ### 项目基础信息
 
@@ -55,7 +66,7 @@
 - [x] **Week 4**: 餐食规划 v1（MealPlan/Entry + 计划 CRUD + quick-log + 每日营养汇总；**里程碑：自己可用 ✅ Phase 1 收官**）
 - [x] **Week 5**: 库存管理（批次 + FEFO 扣减 + 临期提醒 + CRUD，真 token 验证 ✅）
 - [x] **Week 6**: 智能采购清单（I6–I11 全部完成 ✅：缺口/生成重算/回流/属性/预扣视图/用户自建内容 + REST 端点 + 41 测试 + CI）
-- [ ] **Week 7**: AI 菜谱生成
+- [x] **Week 7**: AI 菜谱生成（grounding + 结构化输出 + 供应商可切换 + 真实跑通 ✅）
 - [ ] **Week 8**: AI 周计划 + 反向推荐（**里程碑：核心闭环完成**）
 - [ ] **Week 9**: 测试与性能优化
 - [ ] **Week 10**: 前端打磨
@@ -125,6 +136,14 @@
 - API P99 响应时间：[待测]
 - 数据库查询优化：[优化前 → 优化后]
 - 缓存命中率：[待测]
+
+### 工程质量（Week 7 AI 亮点）
+
+- **LLM 供应商可插拔（adapter 模式实证）**：AI 调用封装在 `app/ai/client.py` 一层；从 Anthropic 切到 Gemini **只改这一个文件 + 配置，49 个测试零改动全过**。业务逻辑不锁定单一厂商 —— 真换过、有证据
+- **grounding 防 LLM 幻觉（双层）**：把真实库存食材清单喂进 prompt 约束 AI 只用清单内 id（软），代码再逐个校验 id 是否存在（硬）；即便 AI 幻觉出清单外食材也被拦截、判失败、绝不写脏数据
+- **AI 调用审计/成本日志**：`ai_generation_logs` 记 prompt/response/token/status/error；成功失败都记。实战中一次 502（模型下线 404）被 error_message 精确定位 —— 失败留痕的价值当场兑现
+- **配置化抗变更**：模型串号放 `.env`，`gemini-2.5-flash` 对新用户下线返 404 时，改一行配置换 `gemini-3.1-flash-lite` 即修复，不动代码
+- **副作用隔离保可测**：调 API（有副作用/花钱）只在 client 一处，prompt 拼装/schema 是纯函数/纯数据；业务测试全程 mock，不依赖真 API
 
 ### 工程质量（Week 6 亮点）
 

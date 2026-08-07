@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     # key 可空: mock 测试不需要; 真调用时由 .env 提供(Google AI Studio 免费层)
     gemini_api_key: str = ""
     # 模型串号放配置, 换模型/换档只改这里。免费层: gemini-2.5-flash / flash-lite
-    gemini_model: str = "gemini-2.5-flash"
+    # 模型串号放配置, 换模型/换档只改这里。免费层: gemini-3.1-flash-lite / gemini-3-flash
+    # (2.5-flash 已对新用户下线 -> 404; 教训: 模型会下线, 串号必须可配置)
+    gemini_model: str = "gemini-3.1-flash-lite"
     ai_max_tokens: int = 2048   # 单次生成输出上限(一个菜谱够用)
 
 @lru_cache

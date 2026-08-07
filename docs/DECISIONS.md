@@ -311,6 +311,51 @@
 
 ---
 
+## AI 系列 — AI 生成决策（Week 7+）
+
+### D-AI1 — AI 菜谱生成：grounding + 结构化输出 ✅ Week 7 实现
+
+- **场景（第一版）**：从用户库存生成菜谱（"我冰箱里这些能做啥"）
+- **grounding（防幻觉，核心）**：把用户库存食材清单（id + 名字）喂进 prompt，
+  要求 AI 只能用清单内的 `ingredient_id` 引用，不得自造食材
+  → **软约束（prompt）+ 硬校验（代码 `_validate` 逐个 id 查是否在清单内）双层防幻觉**
+  → 即便 AI 幻觉出清单外 id，代码拦截、判失败、不写脏数据
+- **结构化输出**：用 tool use / function calling（`save_recipe` 工具，schema = 菜谱结构），
+  强制 AI 按结构返回，避免解析自由文本的脆弱性
+- **输入方式**：结构化选项（免费，前端拼 prompt）+ 一句自由文本（便宜）+ **单次生成**
+  → 不做多轮聊天（省 token）；食材清单**限量**（库存 or 精选常用，只给 id/name 省 input token）
+- **落库**：`source='ai_generated'`、`visibility='private'`、归属当前用户；复用 recipe 创建逻辑
+  + `compute_variant_nutrition` 聚合营养（不信 AI 自报营养）
+
+### D-AI2 — 失败也记日志 + 两段事务 ✅ Week 7 实现
+
+- `ai_generation_logs` 表：user/kind/status/model/prompt/raw_response/token(输入输出分开)/
+  error_message/created_recipe_id/created_at。`kind` 预留 meal_plan（Week 8 复用）
+- **成功/失败都记**：失败的调用最需要留痕（debug 幻觉/超时/模型下线）
+- **事务策略**：校验先于持久化 → 失败时尚未建任何菜谱行 → 无需回滚，只独立提交 failed 日志；
+  成功时菜谱 + 日志同事务提交，两向 FK 互链（recipe.ai_generation_log_id ↔ log.created_recipe_id）
+- **价值实证**：真出 502 时（模型下线），error_message 精确记下 404 原因，一眼定位
+
+### D-AI3 — 供应商：Anthropic → Gemini，adapter 层可切换 ✅ Week 7 实现
+
+- **选型**：起步 Anthropic（tool use 强），后因成本改用 **Google Gemini 免费层**
+  （永久免费、Flash-Lite 1000 次/天，够 MVP + 30-50 用户）
+- **⚠️ Gemini 坑**：一旦开启 billing，该项目免费层立即消失（每 token 计费）；配额可能被砍；
+  免费层数据用于改进 Google 产品（菜谱不敏感，可接受）
+- **adapter 层实证**：从 Anthropic 切到 Gemini **只改 `app/ai/client.py` 一个文件 + 配置**，
+  `services.py`/端点/49 个测试**零改动全过** → LLM 供应商可插拔，业务不锁定单一厂商
+- **模型串号配置化**：`GEMINI_MODEL` 放 settings/.env。`gemini-2.5-flash` 对新用户下线返 404，
+  改 `.env` 一行换 `gemini-3.1-flash-lite` 即修复 → **模型会下线，串号绝不硬编码**
+
+### D-AI-愿景 — 生成来源演进（暂不实现，记录意图）
+
+食材清单来源可替换，主流程（拼 prompt→调 AI→校验→落库→记日志）不变：
+
+1. **第一版（已实现）**：从库存生成 —— grounding=库存
+2. **第二版**：从库存 + 全库按要求选 —— grounding=更大清单（换"取清单"那一步）
+3. **第三版**：网络/知识热门菜谱 —— 放开 grounding + AI 联网 + I11(c) 自动建私有食材
+   （突破"只能用给定食材"前提，与 I11 公开菜谱愿景勾连）
+
 ## 技术债
 
 | # | 债务 | 来源 | 状态 |

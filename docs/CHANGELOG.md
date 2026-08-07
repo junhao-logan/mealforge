@@ -547,3 +547,46 @@ Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成�
 **下一步**：Week 7 AI 菜谱生成（项目核心亮点）
 
 **Week 6 状态：I6–I11 全部完成，智能采购彻底收官 ✅**
+
+### Chat 16 — Week 7：AI 菜谱生成（grounding + 结构化输出 + 供应商可切换，真实跑通）
+
+**日期**：2026-08-07
+**任务**：Week 7 AI 菜谱生成 —— 从库存生成、结构化输出、审计日志、供应商换 Gemini
+
+**完成**：
+
+- **基建**：`ai_generation_logs` 表 + 模型（成功/失败都记, token 输入输出分开, kind 预留 meal_plan）；
+  `recipes.ai_generation_log_id` 补 FK（两表互相引用, 均可空）
+- **`app/ai/` 新域**：client(供应商 adapter) / prompts(纯函数) / recipe_tool(中立 JSON schema) /
+  services(核心) / schemas
+- **grounding**：库存食材清单喂进 prompt, AI 只能用清单内 ingredient_id；`_validate` 硬校验兜底
+- **结构化输出**：`save_recipe` function calling 强制结构化
+- **service**：校验先于持久化（失败无需回滚, 只记 failed 日志）；成功菜谱+日志同事务两向链 +
+  复用 compute_variant_nutrition
+- **端点** `POST /recipes/generate`：空库存 400 / AI 失败 502
+- **供应商 Anthropic → Gemini**：只改 client.py + config + 依赖, services/端点/49 测试零改动全过
+- **49 测试**（+AI service 5 + endpoint 3, 全 mock）
+- CI lint 加 app/ai；config 默认模型 → gemini-3.1-flash-lite
+
+**关键决策/学习**：
+
+- **输入方式重定**：不做多轮聊天（省 token）；用"结构化选项(免费)+一句自由文本(便宜)+单次生成"；
+  食材清单限量
+- **供应商可切换实证**：adapter 层让换 Gemini 只动一个文件, 业务零改 —— 面试硬素材
+- **模型会下线**：`gemini-2.5-flash` 对新用户返 404, 改 `.env` 一行换 3.1-flash-lite 即修复 →
+  串号必须配置化
+- **失败留痕的价值**：真出 502 时 `ai_generation_logs.error_message` 精确记下 404 原因, 一眼定位
+- **Gemini 免费层坑**：开 billing 即失去免费层；配额可能被砍；免费层数据用于训练
+
+**真实验证（$0）**：Gemini 免费层生成「洋葱滑蛋炒鸡胸西兰花」, ingredients 全部是库存食材 id
+(鸡胸1/西兰花10/洋葱12/鸡蛋6), 营养自动聚合(371 kcal / 56g 蛋白), source=ai_generated + private
+
+**遗留**：
+
+- `.python-version` 锁 3.14, 部署前降 3.12（google-genai 在 3.14 有 DeprecationWarning, 第三方库内部, 忽略）
+- D-AI 愿景：生成来源演进（库存→全库→网络热门 + I11(c) 自动建食材）
+- 全仓 lint 欠账：已清 shopping/ingredients/recipes/ai/tests, 其余待清
+
+**下一步**：Week 8 — AI 周计划 + 反向推荐（里程碑：核心闭环完成）
+
+**Week 7 状态：AI 菜谱生成真实端到端跑通 ✅**
