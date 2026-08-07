@@ -30,9 +30,9 @@ async def make_ingredient(db, name, visibility="global", created_by=None) -> Ing
     return ing
 
 
-async def make_variant(db, *lines) -> RecipeVariant:
+async def make_variant(db, *lines, visibility="global") -> RecipeVariant:
     """lines: (ingredient, grams) 元组; 建 recipe + variant + 配料。"""
-    r = Recipe(name="r", source="user")
+    r = Recipe(name="r", source="user", visibility=visibility)
     db.add(r)
     await db.flush()
     v = RecipeVariant(recipe_id=r.id, name="std", instructions="x")

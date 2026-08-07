@@ -4,10 +4,12 @@ from datetime import UTC
 from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingredients.models import Ingredient
-from app.recipes.models import RecipeVariant
+from app.inventory.models import InventoryItem
+from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
 
 
 async def resolve_grams(
@@ -66,3 +68,62 @@ def compute_variant_nutrition(variant: RecipeVariant) -> None:
     # nutrition_computed_at 用 DB 时间, 这里用 Python now 也可; 简单起见标记已算
     from datetime import datetime
     variant.nutrition_computed_at = datetime.now(UTC)
+
+async def recommend_recipes(
+    db: AsyncSession, user, *, max_missing: int = 2
+) -> list[dict]:
+    """反向推荐(功能B): 库存能做哪些【已有可见菜谱的做法】, 宽松匹配。
+
+    以 variant 为单位, 只看"有没有该食材"(不看克数)。返回按缺料数升序:
+    全齐的最前, 缺 ≤max_missing 样的列出缺啥, 缺太多的过滤掉。
+
+    无 N+1: 几条固定查询(与菜谱数无关)+ 内存集合运算, 对齐 compute_shortfall 思路。
+    """
+    # 1. 我库存有哪些食材 id(一个集合, 只看种类不看量)
+    stock_stmt = (
+        select(InventoryItem.ingredient_id)
+        .where(InventoryItem.user_id == user.id, InventoryItem.quantity_grams > 0)
+        .distinct()
+    )
+    stock_ids = {r[0] for r in (await db.execute(stock_stmt)).all()}
+
+    # 2. 一次拉全: 可见菜谱的 variant + 其每条配料(id/名字)
+    #    可见性(I11): global 或自己建的
+    rows_stmt = (
+        select(
+            Recipe.id, Recipe.name,
+            RecipeVariant.id, RecipeVariant.name,
+            RecipeIngredient.ingredient_id, Ingredient.name,
+        )
+        .join(RecipeVariant, RecipeVariant.recipe_id == Recipe.id)
+        .join(RecipeIngredient, RecipeIngredient.recipe_variant_id == RecipeVariant.id)
+        .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
+        .where(
+            or_(
+                Recipe.visibility == "global",
+                Recipe.created_by_user_id == user.id,
+            )
+        )
+    )
+    rows = (await db.execute(rows_stmt)).all()
+
+    # 3. 内存聚合: 按 variant 归组, 算缺料
+    variants: dict[int, dict] = {}
+    for r_id, r_name, v_id, v_name, ing_id, ing_name in rows:
+        v = variants.setdefault(v_id, {
+            "recipe_id": r_id, "recipe_name": r_name,
+            "variant_id": v_id, "variant_name": v_name,
+            "missing_ingredients": [],
+        })
+        if ing_id not in stock_ids:
+            v["missing_ingredients"].append({"id": ing_id, "name": ing_name})
+
+    # 4. 过滤 + 排序: 缺 ≤max_missing 才留; 缺得越少越前, 同缺数按 recipe_id 定序
+    result = []
+    for v in variants.values():
+        miss = v["missing_ingredients"]
+        if len(miss) <= max_missing:
+            v["missing_count"] = len(miss)
+            result.append(v)
+    result.sort(key=lambda x: (x["missing_count"], x["recipe_id"], x["variant_id"]))
+    return result

@@ -81,3 +81,17 @@ class RecipeListItem(BaseModel):
     name: str
     cuisine: str | None
     source: str
+
+class MissingIngredient(BaseModel):
+    id: int
+    name: str
+
+
+class RecipeRecommendation(BaseModel):
+    """反向推荐一项(功能B): 某菜谱的某做法, 及库存缺哪几样。"""
+    recipe_id: int
+    recipe_name: str
+    variant_id: int
+    variant_name: str
+    missing_count: int
+    missing_ingredients: list[MissingIngredient]

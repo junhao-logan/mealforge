@@ -4,6 +4,7 @@ import os
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.ai import models as _ai  # noqa: F401
 from app.core.database import Base
 from app.ingredients import models as _ingredients  # noqa: F401
 from app.inventory import models as _inventory  # noqa: F401

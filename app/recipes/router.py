@@ -18,8 +18,13 @@ from app.recipes.schemas import (
     RecipeCreate,
     RecipeListItem,
     RecipeRead,
+    RecipeRecommendation,
 )
-from app.recipes.services import compute_variant_nutrition, resolve_grams
+from app.recipes.services import (
+    compute_variant_nutrition,
+    recommend_recipes,
+    resolve_grams,
+)
 from app.users.models import User
 
 router = APIRouter(prefix="/recipes", tags=["recipes"])
@@ -140,6 +145,19 @@ async def list_recipes(
         .order_by(Recipe.id).offset(skip).limit(limit)
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+@router.get("/recommendations", response_model=list[RecipeRecommendation])
+async def recipe_recommendations(
+    max_missing: int = Query(2, ge=0, le=10),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """反向推荐(功能B): 库存能做哪些已有菜谱做法, 缺 ≤max_missing 样也列出。
+
+    ⚠️ 必须注册在 GET /{recipe_id} 之前, 否则 "recommendations" 被当 recipe_id。
+    """
+    return await recommend_recipes(db, user, max_missing=max_missing)
 
 
 @router.get("/{recipe_id}", response_model=RecipeRead)
