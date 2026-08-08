@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.ai.client import AiError, AiResult, generate_recipe_raw
+from app.ai.client import AiError, AiResult, generate_meal_plan_raw, generate_recipe_raw
 from app.ai.models import AiGenerationLog
 from app.ai.prompts import build_user_message
 from app.core.config import get_settings
@@ -127,11 +127,12 @@ async def _persist_success(
 
 
 async def _persist_failure_log(
-    db: AsyncSession, user, prompt: str, model: str, error: str, raw: dict | None
+    db: AsyncSession, user, prompt: str, model: str, error: str, raw: dict | None,
+    kind: str = "recipe",
 ) -> None:
     """失败路径: 独立事务记一条 failed 日志(留痕 debug)。"""
     log = AiGenerationLog(
-        user_id=user.id, kind="recipe", status="failed", model=model,
+        user_id=user.id, kind=kind, status="failed", model=model,
         prompt=prompt,
         raw_response=json.dumps(raw, ensure_ascii=False) if raw else None,
         error_message=error,
@@ -171,4 +172,133 @@ async def generate_recipe(
         # 校验先于持久化, 失败时尚未建任何菜谱行 → 无需回滚, 只记 failed 日志
         raw = getattr(e, "raw", None)
         await _persist_failure_log(db, user, prompt, model, str(e), raw)
+        raise
+
+class EmptyRecipeCatalogError(Exception):
+    """没有可用菜谱做法, 无法排周计划。"""
+
+
+async def _variant_catalog(db: AsyncSession, user_id) -> list[dict]:
+    """grounding 数据: 用户可见菜谱的所有 variant + 主料名(供 AI 挑选排布)。"""
+    from sqlalchemy import or_ as _or
+
+    from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
+
+    rows = (await db.execute(
+        select(
+            RecipeVariant.id, Recipe.name, RecipeVariant.name, Ingredient.name,
+        )
+        .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
+        .join(RecipeIngredient, RecipeIngredient.recipe_variant_id == RecipeVariant.id)
+        .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
+        .where(_or(Recipe.visibility == "global", Recipe.created_by_user_id == user_id))
+    )).all()
+
+    catalog: dict[int, dict] = {}
+    for v_id, r_name, v_name, ing_name in rows:
+        c = catalog.setdefault(v_id, {
+            "variant_id": v_id, "recipe_name": r_name,
+            "variant_name": v_name, "ingredients": [],
+        })
+        c["ingredients"].append(ing_name)
+    return list(catalog.values())
+
+
+def _validate_plan(tool_input: dict, catalog_ids: set[int], days: int,
+                   meals: set[str]) -> list[dict]:
+    """防幻觉硬校验: variant_id 在清单内、day_offset/meal_type 合法。"""
+    entries = tool_input.get("entries") or []
+    if not entries:
+        raise RecipeValidationError("AI 未返回任何餐次", raw=tool_input)
+    for e in entries:
+        if e["recipe_variant_id"] not in catalog_ids:
+            raise RecipeValidationError(
+                f"AI 引用了清单外的做法 id: {e['recipe_variant_id']}", raw=tool_input
+            )
+        if not (0 <= e["day_offset"] < days):
+            raise RecipeValidationError(
+                f"day_offset 越界: {e['day_offset']}", raw=tool_input
+            )
+        if e["meal_type"] not in meals:
+            raise RecipeValidationError(
+                f"非法餐段: {e['meal_type']}", raw=tool_input
+            )
+    return entries
+
+
+async def _persist_plan_success(db, user, result, prompt, model, *,
+                                start_date, days) -> object:
+    """成功: 日志 + MealPlan + entries 同事务, 两向链, 一次 commit。"""
+    from datetime import timedelta
+
+    from app.meal_plans.models import MealPlan, MealPlanEntry
+
+    ti = result.tool_input
+    log = AiGenerationLog(
+        user_id=user.id, kind="meal_plan", status="success", model=model,
+        prompt=prompt, raw_response=json.dumps(ti, ensure_ascii=False),
+        input_tokens=result.input_tokens, output_tokens=result.output_tokens,
+    )
+    db.add(log)
+    await db.flush()
+
+    plan = MealPlan(
+        user_id=user.id,
+        start_date=start_date,
+        end_date=start_date + timedelta(days=days - 1),
+        plan_type="ai_generated",
+        ai_generation_log_id=log.id,
+    )
+    db.add(plan)
+    await db.flush()
+
+    for e in ti["entries"]:
+        db.add(MealPlanEntry(
+            meal_plan_id=plan.id,
+            scheduled_date=start_date + timedelta(days=e["day_offset"]),
+            meal_type=e["meal_type"],
+            recipe_variant_id=e["recipe_variant_id"],
+            servings=Decimal(str(e.get("servings") or 1)),
+        ))
+    await db.flush()
+    log.created_recipe_id = None   # meal_plan 类型不关联单个菜谱
+    await db.commit()
+    return plan
+
+
+async def generate_meal_plan(
+    db: AsyncSession, user, *,
+    start_date, days: int = 7,
+    meals: list[str] | None = None,
+    free_text: str | None = None,
+):
+    """AI 从已有可见菜谱排布 N 天计划(Week 8 第一版, 不生成新菜谱)。
+
+    扩展点: 未来"不足时 AI 生成补齐" —— catalog 不够时叫 generate_recipe 补,
+    主流程不变。
+    """
+    from app.ai.prompts import build_meal_plan_message
+
+    meals = meals or ["lunch", "dinner"]
+    catalog = await _variant_catalog(db, user.id)
+    if not catalog:
+        raise EmptyRecipeCatalogError("没有可用菜谱, 无法生成周计划")
+
+    catalog_ids = {c["variant_id"] for c in catalog}
+    prompt = build_meal_plan_message(
+        catalog, days=days, meals=meals, free_text=free_text
+    )
+    model = get_settings().gemini_model
+
+    try:
+        result = await generate_meal_plan_raw(prompt)
+        _validate_plan(result.tool_input, catalog_ids, days, set(meals))
+        return await _persist_plan_success(
+            db, user, result, prompt, model, start_date=start_date, days=days
+        )
+    except (AiError, RecipeValidationError) as e:
+        raw = getattr(e, "raw", None)
+        await _persist_failure_log(
+            db, user, prompt, model, str(e), raw, kind="meal_plan"
+        )
         raise

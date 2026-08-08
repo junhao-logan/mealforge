@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.recipes.models import RecipeVariant
 
+
 class MealPlan(Base):
     """餐食计划聚合根 —— 任意起止日期,允许同用户多个计划时间重叠。"""
     __tablename__ = "meal_plans"
@@ -44,8 +45,10 @@ class MealPlan(Base):
     )  # regular / template / special
     is_template: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    # ai_generation_log_id: 留列不加 FK(ai_generation_logs 表未建, 同 recipes)
-    ai_generation_log_id: Mapped[int | None] = mapped_column(BigInteger)
+    # 由哪次 AI 生成建立(Week 8): FK->ai_generation_logs, 删日志置空
+    ai_generation_log_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("ai_generation_logs.id", ondelete="SET NULL")
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -113,7 +116,7 @@ class MealPlanEntry(Base):
 
     meal_plan: Mapped[MealPlan] = relationship(back_populates="entries")
     # 指向菜谱版本, 供读取时拿营养/名字(纯导航, FK 列已存在)
-    recipe_variant: Mapped["RecipeVariant"] = relationship()
+    recipe_variant: Mapped[RecipeVariant] = relationship()
 
     __table_args__ = (
         Index("idx_meal_plan_entries_plan_date", "meal_plan_id", "scheduled_date"),

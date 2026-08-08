@@ -1,32 +1,71 @@
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.ai.schemas import MealPlanGenerateRequest
+from app.ai.services import (
+    AiError,
+    EmptyRecipeCatalogError,
+    RecipeValidationError,
+    generate_meal_plan,
+)
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
-from app.users.models import User
-from app.recipes.models import RecipeVariant
+from app.inventory import services as inventory_services
 from app.meal_plans.models import MealPlan, MealPlanEntry
 from app.meal_plans.schemas import (
-    MealPlanCreate, MealPlanRead, MealPlanListItem,
-    MealPlanEntryCreate, MealPlanEntryRead,
-)
-from app.meal_plans.services import meal_type_sort_key
-
-from app.nutrition.models import UserNutritionGoal
-from app.meal_plans.schemas import (
-    QuickLogCreate, DailySummaryRead, EntryCompleteRead, ShortfallItem, MacroSummary,
+    DailySummaryRead,
+    EntryCompleteRead,
+    MacroSummary,
+    MealPlanCreate,
+    MealPlanEntryCreate,
+    MealPlanEntryRead,
+    MealPlanListItem,
+    MealPlanRead,
+    QuickLogCreate,
+    ShortfallItem,
 )
 from app.meal_plans.services import (
-    get_or_create_default_plan, expand_plan_range, meal_type_sort_key,  # meal_type_sort_key 已import则不重复
+    expand_plan_range,
+    get_or_create_default_plan,  # meal_type_sort_key 已import则不重复
+    meal_type_sort_key,
 )
-from app.inventory import services as inventory_services
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from app.nutrition.models import UserNutritionGoal
+from app.recipes.models import RecipeVariant
+from app.users.models import User
+
 router = APIRouter(prefix="/meal-plans", tags=["meal-plans"])
+
+
+@router.post("/generate", response_model=MealPlanRead, status_code=201)
+async def generate_meal_plan_endpoint(
+    payload: MealPlanGenerateRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MealPlan:
+    """AI 从已有可见菜谱排布周计划(Week 8)。无可用菜谱 400; AI 失败 502。"""
+    start = payload.start_date or date.today()
+    try:
+        plan = await generate_meal_plan(
+            db, user, start_date=start, days=payload.days,
+            meals=payload.meals, free_text=payload.free_text,
+        )
+    except EmptyRecipeCatalogError as e:
+        raise HTTPException(400, str(e)) from e
+    except (AiError, RecipeValidationError) as e:
+        raise HTTPException(502, "AI 生成暂时不可用, 请稍后重试") from e
+
+    # 重载完整对象(含 entries)供返回
+    loaded = (await db.execute(
+        select(MealPlan)
+        .where(MealPlan.id == plan.id)
+        .options(selectinload(MealPlan.entries))
+    )).scalar_one()
+    return loaded
 
 
 async def _get_owned_plan(
@@ -205,7 +244,7 @@ async def complete_entry(
         )
 
     entry.is_completed = True
-    entry.completed_at = datetime.now(timezone.utc)
+    entry.completed_at = datetime.now(UTC)
 
     # 扣减库存(不 commit, 与上面的完成标记同事务)
     shortfalls = await inventory_services.deduct_for_entry(db, user.id, entry)
