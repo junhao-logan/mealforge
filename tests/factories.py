@@ -66,11 +66,12 @@ async def make_entry(db, plan, variant, servings, day=TODAY, completed=False) ->
     return e
 
 
-async def make_stock(db, user, ing, grams) -> InventoryItem:
+async def make_stock(db, user, ing, grams, *, expires_at=None, purchased_at=None) -> InventoryItem:
     it = InventoryItem(
         user_id=user.id, ingredient_id=ing.id,
         quantity_grams=Decimal(str(grams)),
         input_amount=Decimal(str(grams)), input_unit="g",
+        expires_at=expires_at, purchased_at=purchased_at,
     )
     db.add(it)
     await db.flush()
