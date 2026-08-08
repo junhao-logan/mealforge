@@ -347,6 +347,18 @@
 - **模型串号配置化**：`GEMINI_MODEL` 放 settings/.env。`gemini-2.5-flash` 对新用户下线返 404，
   改 `.env` 一行换 `gemini-3.1-flash-lite` 即修复 → **模型会下线，串号绝不硬编码**
 
+### D-AI4 — AI 周计划：从已有菜谱排布 ✅ Week 8 实现
+
+- **第一版**：AI 从用户【可见菜谱的做法(variant)】里挑选, 排布成 N 天计划(默认 7 天午晚餐)
+  —— 不生成新菜谱(生成 Week 7 已会, 后续叠加)
+- **grounding**：喂"可用做法清单(variant_id + 菜名 + 主料)", AI 只能挑清单内 variant;
+  `_validate_plan` 硬校验 variant_id 在清单内 + day_offset 合法 + meal_type 合法(三重防幻觉)
+- **落库**：复用 meal_plans/meal_plan_entries, plan_type='ai_generated';
+  `ai_generation_logs.kind='meal_plan'`(Week 7 预留字段用上);meal_plans.ai_generation_log_id 补 FK
+- **client 泛化**：抽通用 `_call_tool`, recipe 生成与 plan 生成共用调用核 —— 加新 AI 功能
+  只需新 tool schema + 瘦包装, 不改调用逻辑(开闭原则)
+- **愿景**：第二版"已有不足时 AI 生成新菜谱补齐"(catalog 不够时调 generate_recipe, 主流程不变)
+
 ### D-AI-愿景 — 生成来源演进（暂不实现，记录意图）
 
 食材清单来源可替换，主流程（拼 prompt→调 AI→校验→落库→记日志）不变：

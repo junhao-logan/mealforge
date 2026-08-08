@@ -36,7 +36,21 @@
 - **49 个测试**（+AI 5 service + 3 endpoint）, 全 mock 不真调 API
 - **真实验证**：Gemini 免费层生成「洋葱滑蛋炒鸡胸西兰花」, grounding 全部用库存食材 id, 营养自动算, $0
 
-### 下一步 — Week 8：AI 周计划 + 反向推荐（里程碑：核心闭环完成）
+### Week 8 — AI 周计划 + 反向推荐 ✅ 完成（🏆 核心闭环里程碑达成）
+- **功能 B 反向推荐**（纯查询, 不用 AI）：库存能做哪些已有菜谱做法; variant 级; 宽松匹配（缺 ≤2 列出缺啥）; 按缺料数排序; 无 N+1; `GET /recipes/recommendations`
+- **功能 A AI 周计划**：AI 从已有可见菜谱挑 variant 排布 N 天（默认 7 天午晚）; grounding + 三重校验（variant_id/day_offset/meal_type）; 落 meal_plans/entries, plan_type=ai_generated; 日志 kind=meal_plan（Week7 预留用上）; `POST /meal-plans/generate`
+- **client 泛化**：抽通用 `_call_tool`, recipe+plan 共用调用核（开闭原则）
+- meal_plans.ai_generation_log_id 补 FK（迁移 d5a8c3f10e29）
+- **62 个测试**（+反向推荐 5 +周计划 service 5 +周计划端点 3）
+- CI lint 加 app/meal_plans
+- 菜谱同名策略定案：允许同名(A) + 引导用 variant(D, 愿景)；清理 Week2 遗留重复数据
+
+**🏆 核心闭环成立**：库存 → AI周计划 → 排餐 → 完成扣库存 → 采购缺口 → 清单 → 买 → 回流；反向推荐"库存能做啥"闭合入口。一个完整、能用的 AI 驱动膳食管理产品。
+
+### 下一步 — Week 9：测试与性能优化
+- 提升测试覆盖率（接 pytest-cov + 覆盖率徽章）
+- 性能：AI 调用 P99、DB 查询优化、缓存（Redis 已规划）
+- 全仓 lint 欠账清理 → CI 扩到 ruff check .
 - AI 生成整周计划
 - 反向推荐（库存 → 能做什么）
 - CI lint 已含 app/ai；config 默认模型已改 gemini-3.1-flash-lite
@@ -67,7 +81,7 @@
 - [x] **Week 5**: 库存管理（批次 + FEFO 扣减 + 临期提醒 + CRUD，真 token 验证 ✅）
 - [x] **Week 6**: 智能采购清单（I6–I11 全部完成 ✅：缺口/生成重算/回流/属性/预扣视图/用户自建内容 + REST 端点 + 41 测试 + CI）
 - [x] **Week 7**: AI 菜谱生成（grounding + 结构化输出 + 供应商可切换 + 真实跑通 ✅）
-- [ ] **Week 8**: AI 周计划 + 反向推荐（**里程碑：核心闭环完成**）
+- [x] **Week 8**: AI 周计划 + 反向推荐（🏆 核心闭环里程碑达成 ✅）
 - [ ] **Week 9**: 测试与性能优化
 - [ ] **Week 10**: 前端打磨
 - [ ] **Week 11**: 部署上线
@@ -136,6 +150,14 @@
 - API P99 响应时间：[待测]
 - 数据库查询优化：[优化前 → 优化后]
 - 缓存命中率：[待测]
+
+### 工程质量（Week 8 亮点）
+
+- **adapter 泛化（开闭原则）**：Week 7 只有单菜谱生成, Week 8 抽出通用 `_call_tool`, 菜谱生成与周计划生成共用调用核; 加第三个 AI 功能只需新 tool schema + 瘦包装, 不改调用逻辑
+- **三重防幻觉校验**：周计划里 AI 挑的每一餐, 校验 variant_id 在可见清单内 + day_offset 在范围内 + meal_type 合法; 任一不过判失败、记 kind=meal_plan 的 failed 日志、不写脏计划
+- **推荐用集合运算避免 N+1**：反向推荐"库存能做啥"= 2 条固定查询（库存集合 + JOIN 拉全菜谱配料）+ 内存集合差集, 与菜谱数无关
+- **一表多用的前瞻设计兑现**：Week 7 建日志表时预留 kind 字段, Week 8 周计划直接复用 kind='meal_plan', 无需新表
+- **核心闭环打通**：AI 生成 → 排餐 → 扣库存 → 采购 → 回流 的完整数据流, 每一环都有测试守护
 
 ### 工程质量（Week 7 AI 亮点）
 

@@ -590,3 +590,42 @@ Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成�
 **下一步**：Week 8 — AI 周计划 + 反向推荐（里程碑：核心闭环完成）
 
 **Week 7 状态：AI 菜谱生成真实端到端跑通 ✅**
+
+### Chat 17 — Week 8：AI 周计划 + 反向推荐（🏆 核心闭环里程碑）
+
+**日期**：2026-08-07
+**任务**：Week 8 两个功能 —— 反向推荐(纯查询) + AI 周计划(排布已有菜谱)
+
+**完成**：
+
+- **功能 B 反向推荐**（纯查询, 不用 AI）：`recommend_recipes` —— 库存能做哪些已有可见菜谱做法;
+  variant 级; 宽松匹配（缺 ≤max_missing 默认2, 列出缺啥）; 按缺料数升序; 无 N+1（库存集合 +
+  JOIN 拉全 + 内存差集）; `GET /recipes/recommendations`; 真实验证通过
+- **功能 A AI 周计划**：`generate_meal_plan` —— AI 从可见菜谱 variant 清单挑选, 排 N 天（默认7天午晚）;
+  grounding + 三重校验（variant_id/day_offset/meal_type）; 落 meal_plans/entries, plan_type=ai_generated;
+  日志 kind=meal_plan; `POST /meal-plans/generate`（空目录 400 / AI 失败 502）
+- **client 泛化**：抽通用 `_call_tool`, recipe+plan 共用（开闭原则）
+- meal_plans.ai_generation_log_id 补 FK（迁移 d5a8c3f10e29, 往返+漂移检测通过）
+- **62 测试**（+5 推荐 +5 周计划 service +3 端点）; CI lint 加 app/meal_plans
+- 菜谱同名策略 A+D 存档（D-R2）; 清 Week2 遗留重复 "Chicken rice bowl"
+
+**关键决策/学习**：
+
+- 反向推荐用纯查询而非 AI —— 与 Week7 "AI 从库存现编" 互补, 集合运算又快又准（D-R1）
+- 两个同名菜谱是测试误建, 不是 bug —— 引出同名策略 A(允许)+D(引导用 variant)（D-R2）
+- adapter 泛化: 加 AI 功能只写 schema+包装, 印证 Week7 封装的可扩展性
+- 一表多用: Week7 预留的 kind 字段 Week8 直接复用, 不建新表
+- conftest 漏 import app.ai.models 导致单独跑测试时 FK 找不到目标表 —— 补齐（models 必须 import 才被 create_all 收到）
+
+**🏆 里程碑：核心闭环成立** —— 库存→AI周计划→排餐→扣库存→采购→回流, 反向推荐闭合入口。
+完整、能用的 AI 驱动膳食管理产品。
+
+**遗留**：
+
+- 周计划第二版"不足时 AI 生成补齐"（D-AI4 愿景）
+- 全仓 lint 欠账: 已清 shopping/ingredients/recipes/ai/meal_plans/tests, 其余待清
+- `.python-version` 锁 3.14, 部署前降 3.12
+
+**下一步**：Week 9 — 测试与性能优化
+
+**Week 8 状态：核心闭环里程碑达成 ✅🏆**
