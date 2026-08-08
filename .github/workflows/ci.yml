@@ -49,5 +49,6 @@ jobs:
         # 已清理的模块; 全仓 lint 欠账清理后再扩到 ruff check .
         run: uv run ruff check app/shopping app/ingredients app/recipes app/ai app/meal_plans tests
 
-      - name: Run tests
-        run: uv run pytest tests/ -v
+      - name: Run tests with coverage
+        # --cov-fail-under: 覆盖率低于阈值则 CI 失败, 防止倒退。当前 78%, 门槛设 75 留余量
+        run: uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=75

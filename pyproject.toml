@@ -20,6 +20,7 @@ dev = [
     "ruff>=0.9",
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
     "httpx>=0.28",
 ]
 
@@ -41,3 +42,18 @@ ignore = ["B008"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/*/seed_*.py",          # 一次性种子脚本, 不计入
+    "app/*/__init__.py",
+]
+
+[tool.coverage.report]
+# 排除无需测的行(如 TYPE_CHECKING 块)
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
