@@ -392,6 +392,48 @@
 - **当前**：不拦截同名; recommend_recipes 如实推荐(recipe_id 不同即不同菜谱)
 - **注**：现有两条同名 "Chicken rice bowl"(id 1/2)是 Week 2 测试误建的重复数据, 已清理
 
+## P 系列 — 性能与缓存决策（Week 9）
+
+### D-P1 — 每日营养汇总缓存：Cache-Aside + Redis ✅ Week 9 实现
+
+- **问题**：`GET /daily-summary` 每次请求都聚合(查当天所有餐次 + 各 variant 营养 ×
+  份数 + 查目标)。同一天数据不变时重复算是浪费, 用户多/数据大时成为热点。
+- **Cache-Aside(旁路缓存)**：先查 Redis, 命中直接返回; 未命中才聚合, 算完写回 Redis。
+  业务逻辑零改动, 只在端点头尾包一层。
+- **key 设计**：`summary:{user_id}:{date}` —— 带 user_id(隔离+隐私)、date(按天)。
+  **存与删用同一个 `summary_key()` 生成**, 避免拼错对不上删不掉。
+- **TTL 兜底**：默认 1 小时过期 —— 即便主动失效漏了某处, 最坏也只旧 1 小时。
+
+### D-P2 — 缓存失效策略：写操作精准失效 ✅ Week 9 实现
+
+- **原则**：任何改变"某天营养"的写操作, 成功后主动删对应天的缓存 key, 下次请求重算。
+- **覆盖的 6 个写操作 → 失效的天**：
+  - quick-log / add-entry / complete-entry → 那餐的 `scheduled_date`(单天)
+  - delete-entry → 被删餐日期(**删前记录**, 删后取不到)
+  - generate(AI 周计划) / delete-plan → 计划覆盖的每一天(`_dates_in` 展开; delete 删前记范围)
+- **难点(记录, 第一版未做)**：改一道 variant 的配料/营养 → 它被排进的**所有天**缓存都该失效,
+  需反查"该 variant 被哪些天用了"。当前 variant 营养改动少 + TTL 兜底, 暂缓; 是下一步优化点。
+
+### D-P3 — 优雅降级：缓存永不拖垮业务 ✅ Week 9 实现
+
+- **Redis 是可丢的加速副本, 真相在 Postgres**。故 `cache.py` 所有操作 try/except 兜底:
+  get 出错当未命中(退回查库)、set/delete 出错静默忽略。
+- **效果**：Redis 挂了 → daily-summary 仍 200(退回聚合), 写操作仍成功(只是没删成缓存)。
+  缓存是锦上添花, 绝不因它引入新崩溃点。
+
+### D-P4 — 附带修复：路由遮蔽(FastAPI 静态 vs 动态) ✅ Week 9
+
+- **bug**：`GET /daily-summary` 返回 422 "unable to parse 'daily-summary' as integer"
+  —— 被先注册的 `GET /{plan_id}` 当成 plan_id。之前无数据未测到, 加缓存时才暴露。
+- **修**：`/{plan_id}` → `/{plan_id:int}`(动态路由只匹配整数)+ 静态路径前置。双保险。
+- **教训**：静态路由永远放动态路由前; 路径参数能加类型约束就加, 比纯靠顺序健壮。
+
+### 测试(fakeredis, 不依赖真容器)
+
+- 用 `fakeredis` + FastAPI `dependency_overrides[get_redis]` 注入假 redis(同 mock Gemini 思路)。
+- 6 个测试: 路由不遮蔽 / 未命中存缓存 / 命中读缓存 / 写失效 / 失效后重算 / Redis 挂了降级。
+- `cache_redis` fixture 暴露 api_client 用的同一假 redis 供断言; api_client 返回值不变(不破坏旧测试)。
+
 ## 技术债
 
 | # | 债务 | 来源 | 状态 |

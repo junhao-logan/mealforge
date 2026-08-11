@@ -629,3 +629,40 @@ Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成�
 **下一步**：Week 9 — 测试与性能优化
 
 **Week 8 状态：核心闭环里程碑达成 ✅🏆**
+
+### Chat 18 — Week 9：测试完整度 + Redis 缓存与失效策略
+
+**日期**：2026-08-09
+**任务**：Week 9 线1(测试) + 线2(性能/缓存)
+
+**完成**：
+
+- **线1 测试**: pytest-cov + `[tool.coverage]`(排除种子); CI `--cov-fail-under=75` 门槛;
+  补 FEFO 扣减(7)、TDEE/BMR/宏量(11)、meal_plans 辅助(7)测试
+- **线2 缓存**: `app/core/redis.py`(连接层, 全局 client + get_redis 依赖) +
+  `app/core/cache.py`(cache_get/set/delete + summary_key + invalidate_summary, 全 try/except 降级)
+- daily-summary 加 Cache-Aside; 6 个写操作精准失效(quick-log/add/delete/complete/generate/delete-plan)
+- **修复路由遮蔽**: /{plan_id} → /{plan_id:int} + 静态路径前置(daily-summary 之前返 422)
+- fakeredis 写 6 个缓存测试(命中/失效/重算/降级/路由); api_client 加 fakeredis 注入 + cache_redis fixture
+- **93 测试, 覆盖率 86%**
+
+**关键决策/学习**：
+
+- Cache-Aside: 业务零改动只包一层; key `summary:{user}:{date}` 存删统一生成
+- 缓存失效: 写操作后精准删对应天; 删操作删前记录日期(删后取不到); TTL 1h 兜底
+- 优雅降级: Redis 可丢, 真相在 PG; 缓存任何错不向上抛, 最坏"慢一点"
+- 失效难点(记录): 改 variant 营养影响多天缓存, 需反查引用, 第一版未做
+- 路由遮蔽: 静态路径必在动态前; {plan_id:int} 类型约束比靠顺序健壮
+- 覆盖率哲学: 覆盖核心逻辑, 不为 router 样板/外部调用凑 100%
+- fakeredis: 测缓存不依赖真容器(同 mock Gemini 思路); api_client 返回值不变以免破坏旧测试
+- async 测试事件循环: loop_scope="session" 对 asyncpg 必需; 同步+异步混排要逐个标记
+
+**遗留**：
+
+- 缓存失效第二版: variant 营养变更 → 反查影响天精准失效
+- Python 3.14→3.12; 全仓 lint 欠账
+- 覆盖率徽章仍静态(未接 Codecov)
+
+**下一步**：Week 10 前端 / Week 11 部署
+
+**Week 9 状态：测试完整度 + Redis 缓存与失效策略完成 ✅**

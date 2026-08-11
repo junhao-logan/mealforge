@@ -64,10 +64,12 @@ async def api_client(_engine):
     savepoint, 外层事务结束仍整体回滚 → HTTP 测试也零残留。
     返回 (client, session, user)。
     """
+    from fakeredis.aioredis import FakeRedis
     from httpx import ASGITransport, AsyncClient
 
     from app.auth.dependencies import get_current_user
     from app.core.database import get_db
+    from app.core.redis import get_redis
     from app.main import app
     from app.users.models import User
 
@@ -83,8 +85,15 @@ async def api_client(_engine):
     async def _override_db():
         yield session
 
+    fake_redis = FakeRedis(decode_responses=True)   # 内存假 redis, 无需容器
+    app.state._test_fake_redis = fake_redis          # 供 cache_redis fixture 取用
+
+    async def _override_redis():
+        yield fake_redis
+
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_redis] = _override_redis
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -94,3 +103,13 @@ async def api_client(_engine):
     await session.close()
     await trans.rollback()
     await conn.close()
+
+
+@pytest_asyncio.fixture
+async def cache_redis(api_client):
+    """拿到 api_client 正在用的那个假 redis(同一实例), 供缓存断言。
+
+    用法: 测试同时依赖 api_client 和 cache_redis, 后者能看到端点写入的缓存。
+    """
+    from app.main import app
+    return app.state._test_fake_redis
