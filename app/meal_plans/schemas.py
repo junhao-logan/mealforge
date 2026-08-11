@@ -3,7 +3,6 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ---------- 计划 ----------
 
 class MealPlanCreate(BaseModel):
