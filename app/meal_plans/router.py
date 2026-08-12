@@ -21,6 +21,7 @@ from app.core.redis import get_redis
 from app.inventory import services as inventory_services
 from app.meal_plans.models import MealPlan, MealPlanEntry
 from app.meal_plans.schemas import (
+    CalendarEntryRead,
     DailySummaryRead,
     EntryCompleteRead,
     MacroSummary,
@@ -38,7 +39,7 @@ from app.meal_plans.services import (
     meal_type_sort_key,
 )
 from app.nutrition.models import UserNutritionGoal
-from app.recipes.models import RecipeVariant
+from app.recipes.models import Recipe, RecipeVariant
 from app.users.models import User
 
 router = APIRouter(prefix="/meal-plans", tags=["meal-plans"])
@@ -154,6 +155,49 @@ async def list_plans(
 # ---------- 每日营养汇总(静态路径, 必须在 /{plan_id} 之前注册) ----------
 # ⚠️ 路由顺序: /daily-summary 是静态路径, 若排在 /{plan_id:int} 之后本可匹配,
 #    但用 {plan_id:int} 约束后动态路由只吃整数, 静态路径不会被遮蔽。双保险。
+
+@router.get("/entries", response_model=list[CalendarEntryRead])
+async def list_entries_in_range(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    start: date = Query(...),
+    end: date = Query(...),
+) -> list[CalendarEntryRead]:
+    """日历视图数据源: 某用户在 [start, end] 内、跨所有 plan 的餐次。
+
+    一次查询带出菜名(join recipe/variant), 前端各视图(天/周/月)共用。
+    无 N+1: 单查询 join。按日期→餐次序→sort_order 排序。
+    """
+    stmt = (
+        select(
+            MealPlanEntry.id, MealPlan.id,
+            MealPlanEntry.scheduled_date, MealPlanEntry.meal_type,
+            MealPlanEntry.sort_order, MealPlanEntry.recipe_variant_id,
+            Recipe.id, Recipe.name, RecipeVariant.name,
+            MealPlanEntry.servings, MealPlanEntry.is_completed,
+        )
+        .join(MealPlan, MealPlanEntry.meal_plan_id == MealPlan.id)
+        .join(RecipeVariant, RecipeVariant.id == MealPlanEntry.recipe_variant_id)
+        .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
+        .where(
+            MealPlan.user_id == user.id,
+            MealPlanEntry.scheduled_date >= start,
+            MealPlanEntry.scheduled_date <= end,
+        )
+    )
+    rows = (await db.execute(stmt)).all()
+    items = [
+        CalendarEntryRead(
+            id=r[0], plan_id=r[1], scheduled_date=r[2], meal_type=r[3],
+            sort_order=r[4], recipe_variant_id=r[5], recipe_id=r[6],
+            recipe_name=r[7], variant_name=r[8], servings=r[9], is_completed=r[10],
+        )
+        for r in rows
+    ]
+    # 排序: 日期 → 餐次自定义序 → sort_order
+    items.sort(key=lambda e: (e.scheduled_date, meal_type_sort_key(e.meal_type), e.sort_order))
+    return items
+
 
 @router.get("/daily-summary", response_model=DailySummaryRead)
 async def daily_summary(

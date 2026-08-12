@@ -50,6 +50,22 @@ class MealPlanEntryRead(BaseModel):
     notes: str | None
 
 
+class CalendarEntryRead(BaseModel):
+    """日历视图用: 餐次 + 冗余菜名/recipe_id(前端显示&跳详情)+ 所属 plan。
+    避免前端 N+1 查菜名。"""
+    id: int
+    plan_id: int
+    scheduled_date: date
+    meal_type: str
+    sort_order: int
+    recipe_variant_id: int
+    recipe_id: int
+    recipe_name: str
+    variant_name: str
+    servings: Decimal
+    is_completed: bool
+
+
 class MealPlanRead(BaseModel):
     """计划详情(含扁平排序的 entry 列表)。"""
     model_config = ConfigDict(from_attributes=True)
