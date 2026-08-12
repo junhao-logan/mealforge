@@ -35,11 +35,22 @@ async function request(method, path, { token, body, params } = {}) {
     const data = await resp.json().catch(() => null)
 
     if (!resp.ok) {
-        // 后端错误统一抛出, 页面 catch 显示
-        const detail = data?.detail || `请求失败 (${resp.status})`
-        throw new ApiError(detail, resp.status)
+        // 后端错误统一抛出。detail 可能是字符串、数组(校验错误)或对象,
+        // 统一提成可读字符串, 避免页面显示 [object Object]。
+        throw new ApiError(extractDetail(data, resp.status), resp.status)
     }
     return data
+}
+
+function extractDetail(data, status) {
+    const d = data?.detail
+    if (typeof d === 'string') return d
+    if (Array.isArray(d)) {
+        // FastAPI 校验错误: [{loc, msg, ...}] → 取 msg 拼接
+        return d.map((e) => e?.msg || JSON.stringify(e)).join('; ')
+    }
+    if (d && typeof d === 'object') return JSON.stringify(d)
+    return `请求失败 (${status})`
 }
 
 export class ApiError extends Error {

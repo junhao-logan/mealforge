@@ -4,7 +4,7 @@ from datetime import UTC
 from decimal import Decimal
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingredients.models import Ingredient
@@ -72,28 +72,34 @@ def compute_variant_nutrition(variant: RecipeVariant) -> None:
 async def recommend_recipes(
     db: AsyncSession, user, *, max_missing: int = 2
 ) -> list[dict]:
-    """反向推荐(功能B): 库存能做哪些【已有可见菜谱的做法】, 宽松匹配。
+    """反向推荐(功能B): 库存能做哪些【已有可见菜谱的做法】。
 
-    以 variant 为单位, 只看"有没有该食材"(不看克数)。返回按缺料数升序:
-    全齐的最前, 缺 ≤max_missing 样的列出缺啥, 缺太多的过滤掉。
+    以 variant 为单位。每样配料按库存判定三态(D-R1 增强: 从"只看有无"升级为看克数):
+      - have    : 库存有该食材且总量 >= 配方需求
+      - partial : 库存有该食材但总量 < 配方需求(不够)
+      - missing : 库存完全没有该食材
 
-    无 N+1: 几条固定查询(与菜谱数无关)+ 内存集合运算, 对齐 compute_shortfall 思路。
+    缺料数(missing_count)= partial + missing 的数量(不够或没有都算"缺")。
+    返回完整食材清单(ingredients)供前端可视化, 同时保留 missing_ingredients 向后兼容。
+    按缺料数升序: 全齐最前, 缺 ≤max_missing 列出, 缺太多过滤。
+
+    无 N+1: 几条固定查询 + 内存运算。
     """
-    # 1. 我库存有哪些食材 id(一个集合, 只看种类不看量)
+    # 1. 我库存: 每样食材的总克数(同食材多批次求和)
     stock_stmt = (
-        select(InventoryItem.ingredient_id)
+        select(InventoryItem.ingredient_id, func.sum(InventoryItem.quantity_grams))
         .where(InventoryItem.user_id == user.id, InventoryItem.quantity_grams > 0)
-        .distinct()
+        .group_by(InventoryItem.ingredient_id)
     )
-    stock_ids = {r[0] for r in (await db.execute(stock_stmt)).all()}
+    stock_grams = {r[0]: r[1] for r in (await db.execute(stock_stmt)).all()}
 
-    # 2. 一次拉全: 可见菜谱的 variant + 其每条配料(id/名字)
-    #    可见性(I11): global 或自己建的
+    # 2. 一次拉全: 可见菜谱的 variant + 每条配料(id/名字/需求克数)
     rows_stmt = (
         select(
             Recipe.id, Recipe.name,
             RecipeVariant.id, RecipeVariant.name,
             RecipeIngredient.ingredient_id, Ingredient.name,
+            RecipeIngredient.quantity_grams,
         )
         .join(RecipeVariant, RecipeVariant.recipe_id == Recipe.id)
         .join(RecipeIngredient, RecipeIngredient.recipe_variant_id == RecipeVariant.id)
@@ -107,23 +113,36 @@ async def recommend_recipes(
     )
     rows = (await db.execute(rows_stmt)).all()
 
-    # 3. 内存聚合: 按 variant 归组, 算缺料
+    # 3. 内存聚合: 按 variant 归组, 每样配料判三态
     variants: dict[int, dict] = {}
-    for r_id, r_name, v_id, v_name, ing_id, ing_name in rows:
+    for r_id, r_name, v_id, v_name, ing_id, ing_name, need_grams in rows:
         v = variants.setdefault(v_id, {
             "recipe_id": r_id, "recipe_name": r_name,
             "variant_id": v_id, "variant_name": v_name,
-            "missing_ingredients": [],
+            "ingredients": [],
         })
-        if ing_id not in stock_ids:
-            v["missing_ingredients"].append({"id": ing_id, "name": ing_name})
+        have_grams = stock_grams.get(ing_id)
+        if have_grams is None:
+            status = "missing"                       # 库存完全没有
+        elif need_grams is not None and have_grams < need_grams:
+            status = "partial"                       # 有但不够
+        else:
+            status = "have"                          # 够(或配方未标克数)
+        v["ingredients"].append({
+            "id": ing_id, "name": ing_name, "status": status,
+        })
 
-    # 4. 过滤 + 排序: 缺 ≤max_missing 才留; 缺得越少越前, 同缺数按 recipe_id 定序
+    # 4. 过滤 + 排序: 缺料数(partial+missing) <= max_missing 才留
     result = []
     for v in variants.values():
-        miss = v["missing_ingredients"]
-        if len(miss) <= max_missing:
-            v["missing_count"] = len(miss)
+        missing = [i for i in v["ingredients"] if i["status"] == "missing"]
+        short = [i for i in v["ingredients"] if i["status"] in ("missing", "partial")]
+        if len(short) <= max_missing:
+            v["missing_count"] = len(short)
+            # 向后兼容: missing_ingredients 保留(只含完全没有的)
+            v["missing_ingredients"] = [
+                {"id": i["id"], "name": i["name"]} for i in missing
+            ]
             result.append(v)
     result.sort(key=lambda x: (x["missing_count"], x["recipe_id"], x["variant_id"]))
     return result

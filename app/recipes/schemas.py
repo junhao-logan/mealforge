@@ -87,11 +87,19 @@ class MissingIngredient(BaseModel):
     name: str
 
 
+class IngredientStatus(BaseModel):
+    """反向推荐里, 某道菜的一样配料 + 库存判定的三态。"""
+    id: int
+    name: str
+    status: str   # 'have'(够) / 'partial'(不够) / 'missing'(没有)
+
+
 class RecipeRecommendation(BaseModel):
-    """反向推荐一项(功能B): 某菜谱的某做法, 及库存缺哪几样。"""
+    """反向推荐一项(功能B): 某菜谱的某做法, 完整食材清单(三态) + 缺料汇总。"""
     recipe_id: int
     recipe_name: str
     variant_id: int
     variant_name: str
-    missing_count: int
-    missing_ingredients: list[MissingIngredient]
+    missing_count: int                            # partial + missing 数量
+    ingredients: list[IngredientStatus]           # 完整食材清单(三态)
+    missing_ingredients: list[MissingIngredient]  # 向后兼容: 仅完全没有的

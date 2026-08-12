@@ -90,3 +90,39 @@ async def test_only_visible_recipes(db):
 
     recs = await recommend_recipes(db, u, max_missing=2)
     assert recs == []                       # 别人的私有, 看不见
+
+async def test_partial_stock_counts_as_short(db):
+    """库存有该食材但量不够 → status=partial, 计入 missing_count。"""
+    u = await make_user(db)
+    tomato = await make_ingredient(db, "tomato")
+    egg = await make_ingredient(db, "egg")
+    await make_variant(db, (tomato, 100), (egg, 50))
+    await make_stock(db, u, tomato, 200)   # 番茄够
+    await make_stock(db, u, egg, 20)       # 蛋不够(需 50 只有 20)
+
+    recs = await recommend_recipes(db, u, max_missing=2)
+    assert len(recs) == 1
+    rec = recs[0]
+    assert rec["missing_count"] == 1                       # 蛋不够, 算缺 1
+    # 完整清单三态: 番茄 have, 蛋 partial
+    by_name = {i["name"]: i["status"] for i in rec["ingredients"]}
+    assert by_name["tomato"] == "have"
+    assert by_name["egg"] == "partial"
+    # 向后兼容: missing_ingredients 只含"完全没有"的, 蛋是 partial 不在其中
+    assert rec["missing_ingredients"] == []
+
+
+async def test_ingredients_full_list_returned(db):
+    """返回完整食材清单(有的+没有的都在 ingredients 里)。"""
+    u = await make_user(db)
+    tomato = await make_ingredient(db, "tomato")
+    garlic = await make_ingredient(db, "garlic")
+    await make_variant(db, (tomato, 100), (garlic, 10))
+    await make_stock(db, u, tomato, 200)   # 有番茄, 没蒜
+
+    recs = await recommend_recipes(db, u, max_missing=2)
+    rec = recs[0]
+    assert len(rec["ingredients"]) == 2                    # 完整清单 2 样
+    by_name = {i["name"]: i["status"] for i in rec["ingredients"]}
+    assert by_name["tomato"] == "have"
+    assert by_name["garlic"] == "missing"

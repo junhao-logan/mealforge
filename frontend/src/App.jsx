@@ -7,10 +7,10 @@ import { DashboardPage } from '@/pages/DashboardPage'
 import { InventoryPage } from '@/pages/InventoryPage'
 import { MealPlansPage } from '@/pages/MealPlansPage'
 import { NutritionPage } from '@/pages/NutritionPage'
+import { RecipeDetailPage } from '@/pages/RecipeDetailPage'
 import { RecipesPage } from '@/pages/RecipesPage'
 import { ShoppingPage } from '@/pages/ShoppingPage'
 
-// 未登录时的落地页
 function LandingPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50">
@@ -32,13 +32,13 @@ function LandingPage() {
 function App() {
   return (
     <>
-      {/* 登录了才显示应用; 没登录显示落地页 */}
       <SignedIn>
         <Routes>
           <Route element={<AppLayout />}>
             <Route index element={<DashboardPage />} />
             <Route path="inventory" element={<InventoryPage />} />
             <Route path="recipes" element={<RecipesPage />} />
+            <Route path="recipes/:id" element={<RecipeDetailPage />} />
             <Route path="meal-plans" element={<MealPlansPage />} />
             <Route path="shopping" element={<ShoppingPage />} />
             <Route path="nutrition" element={<NutritionPage />} />
