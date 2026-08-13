@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { AddInventoryDialog } from '@/components/inventory/AddInventoryDialog'
 import { EditInventoryDialog } from '@/components/inventory/EditInventoryDialog'
-import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
@@ -147,12 +146,12 @@ function InventoryCard({ item, name, onDelete, onEdit }) {
                 </span>
                 <div className="flex items-center gap-2">
                     {label && (
-                        <Badge
-                            variant="destructive"
-                            className={`text-xs ${label.variant === 'expired' ? 'bg-red-600' : 'bg-amber-500'}`}
+                        <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-medium text-white ${label.variant === 'expired' ? 'bg-red-600' : 'bg-amber-500'
+                                }`}
                         >
                             {label.text}
-                        </Badge>
+                        </span>
                     )}
                     <button
                         className="text-slate-400 opacity-0 transition-opacity hover:text-red-500 group-hover:opacity-100"
