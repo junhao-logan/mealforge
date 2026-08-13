@@ -342,12 +342,8 @@ async def add_entry(
 ) -> MealPlanEntry:
     plan = await _get_owned_plan(db, plan_id, user)
 
-    if not (plan.start_date <= payload.scheduled_date <= plan.end_date):
-        raise HTTPException(
-            422,
-            f"日期 {payload.scheduled_date} 超出计划范围 "
-            f"({plan.start_date} ~ {plan.end_date})",
-        )
+    # 日期超出 plan 范围 → 自动扩展(与 quick-log 一致, 统一排餐行为)
+    expand_plan_range(plan, payload.scheduled_date)
 
     variant = await db.get(RecipeVariant, payload.recipe_variant_id)
     if variant is None:

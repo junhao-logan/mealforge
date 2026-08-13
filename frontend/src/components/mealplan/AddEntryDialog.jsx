@@ -1,5 +1,5 @@
 // src/components/mealplan/AddEntryDialog.jsx
-// 手动排餐: 某天选菜谱 + 餐段 → quick-log(自动进 default plan, 免管 plan_id)
+// 手动排餐: 选 plan + 菜谱 + 餐段 → POST /{plan_id}/entries(指定 plan)
 import { useEffect, useState } from 'react'
 
 import {
@@ -15,17 +15,22 @@ const MEALS = [
     { value: 'snack', label: '加餐' },
 ]
 
-// 受控弹窗: 父组件用 open/date 控制(点某天的+排餐打开)
-export function AddEntryDialog({ open, date, onClose, onAdded }) {
+export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAdded }) {
     const { call } = useApi()
-    const [recipes, setRecipes] = useState([])   // [{id, name, variant_id}]
+    const [recipes, setRecipes] = useState([])
+    const [planId, setPlanId] = useState('')
     const [variantId, setVariantId] = useState('')
     const [mealType, setMealType] = useState('lunch')
     const [servings, setServings] = useState('1')
     const [submitting, setSubmitting] = useState(false)
     const [error, setError] = useState(null)
 
-    // 打开时拉菜谱(含 variant, 排餐要 variant_id)
+    // 默认选中当前筛选的 plan(没有则第一个)
+    useEffect(() => {
+        if (!open) return
+        setPlanId(String(defaultPlanId || plans[0]?.id || ''))
+    }, [open, defaultPlanId, plans])
+
     useEffect(() => {
         if (!open) return
         let alive = true
@@ -33,8 +38,6 @@ export function AddEntryDialog({ open, date, onClose, onAdded }) {
             try {
                 const list = await call(api.get, '/recipes')
                 if (!alive) return
-                // 每个菜谱拉第一个 variant(简化: 用 detail 拿 variant)
-                // 先用列表, variant_id 通过 detail 获取
                 const withVariants = []
                 for (const r of list || []) {
                     const detail = await call(api.get, `/recipes/${r.id}`)
@@ -51,23 +54,30 @@ export function AddEntryDialog({ open, date, onClose, onAdded }) {
     }, [open, call])
 
     async function submit() {
+        if (!planId) { setError('请选择计划'); return }
         if (!variantId) { setError('请选择菜谱'); return }
         try {
             setSubmitting(true)
             setError(null)
-            await call(api.post, '/meal-plans/quick-log', {
+            // POST /{plan_id}/entries —— 指定 plan 排餐
+            await call(api.post, `/meal-plans/${planId}/entries`, {
                 body: {
-                    recipe_variant_id: Number(variantId),
-                    meal_type: mealType,
-                    servings: Number(servings),
                     scheduled_date: date,
+                    meal_type: mealType,
+                    recipe_variant_id: Number(variantId),
+                    servings: Number(servings),
                 },
             })
             setVariantId(''); setMealType('lunch'); setServings('1')
             onAdded?.()
             onClose?.()
         } catch (e) {
-            setError(e.message || '排餐失败')
+            // add_entry 会校验日期在 plan 范围内; 但新 plan 日期是今天, 排未来餐会 422
+            if (e.status === 422 && String(e.message).includes('超出计划范围')) {
+                setError('该日期超出所选计划范围。提示: 新建计划后先排今天的餐,范围会自动扩展;或选其他计划。')
+            } else {
+                setError(e.message || '排餐失败')
+            }
         } finally {
             setSubmitting(false)
         }
@@ -81,6 +91,21 @@ export function AddEntryDialog({ open, date, onClose, onAdded }) {
                 </DialogHeader>
 
                 <div className="space-y-4">
+                    {/* 计划 */}
+                    <div>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">加入计划</label>
+                        <select
+                            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                            value={planId}
+                            onChange={(e) => setPlanId(e.target.value)}
+                        >
+                            {plans.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name || `计划 #${p.id}`}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* 菜谱 */}
                     <div>
                         <label className="mb-1 block text-sm font-medium text-slate-700">菜谱</label>
                         <select

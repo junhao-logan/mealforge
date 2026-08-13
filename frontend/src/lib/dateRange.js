@@ -50,3 +50,9 @@ export function isToday(d) {
     return d.getFullYear() === t.getFullYear() &&
         d.getMonth() === t.getMonth() && d.getDate() === t.getDate()
 }
+
+// 完整日期显示: "2026年8月12日 周三"
+const WEEKDAY_FULL = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+export function fullDate(d) {
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAY_FULL[d.getDay()]}`
+}
