@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AddEntryDialog } from '@/components/mealplan/AddEntryDialog'
 import { GenerateMealPlanDialog } from '@/components/mealplan/GenerateMealPlanDialog'
 import { MealEntryCard } from '@/components/mealplan/MealEntryCard'
-import { PlanBar } from '@/components/mealplan/PlanBar'
+import { DeletePlanButton, PlanBar } from '@/components/mealplan/PlanBar'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 import {
@@ -134,6 +134,15 @@ export function MealPlansPage() {
                 >
                     回到{isWeek ? '本周' : '今天'}
                 </button>
+                {/* 选中某plan时, 右侧显示删除(避免误触) */}
+                {activePlanId !== null && (
+                    <div className="ml-auto">
+                        <DeletePlanButton
+                            plan={plans.find((p) => p.id === activePlanId) || { id: activePlanId }}
+                            onDeleted={() => { setActivePlanId(null); reload() }}
+                        />
+                    </div>
+                )}
             </div>
 
             {loading && <State text="加载中…" />}
@@ -242,15 +251,48 @@ function WeekView({ days, entries, orientation, onComplete, onDelete, onAdd }) {
     )
 }
 
-// ── 天视图: 单天详细 ──
+// ── 天视图: 按早/午/晚/加餐分 block ──
+const MEAL_SECTIONS = [
+    { type: 'breakfast', label: '早餐' },
+    { type: 'lunch', label: '午餐' },
+    { type: 'dinner', label: '晚餐' },
+    { type: 'snack', label: '加餐' },
+]
+
 function DayView({ date, entries, onComplete, onDelete, onAdd }) {
     const iso = toISO(date)
     const dayEntries = entriesOf(entries, iso)
+
     return (
-        <DayBlock
-            date={date} dayEntries={dayEntries} big
-            onComplete={onComplete} onDelete={onDelete} onAdd={onAdd}
-        />
+        <div className="space-y-4">
+            {MEAL_SECTIONS.map((sec) => {
+                const secEntries = dayEntries.filter((e) => e.meal_type === sec.type)
+                // 加餐没内容就不显示(早午晚始终显示)
+                if (sec.type === 'snack' && secEntries.length === 0) return null
+                return (
+                    <div key={sec.type} className="rounded-xl border border-slate-200 bg-white p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                            <h3 className="font-semibold text-slate-800">{sec.label}</h3>
+                            <button
+                                className="text-sm text-slate-400 hover:text-slate-700"
+                                onClick={() => onAdd(iso)}
+                            >
+                                + 添加
+                            </button>
+                        </div>
+                        {secEntries.length === 0 ? (
+                            <p className="py-2 text-center text-sm text-slate-300">还没安排</p>
+                        ) : (
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                {secEntries.map((e) => (
+                                    <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onDelete={onDelete} />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )
+            })}
+        </div>
     )
 }
 

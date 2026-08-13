@@ -1,6 +1,6 @@
 // src/components/mealplan/PlanBar.jsx
-// plan 筛选栏: 全部/某个 plan 切换 + 创建 + 删除。层次C(默认合并, 可筛选)
-import { Plus, Trash2, X } from 'lucide-react'
+// plan 筛选栏: 全部/某plan 切换 + 新建。删除移到选中后的右上角(避免误触)。
+import { Plus } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -23,7 +23,6 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
             setCreating(true)
             setError(null)
             const today = toISO(new Date())
-            // 日期用今天(排餐时 expand_plan_range 自动扩展)
             await call(api.post, '/meal-plans', {
                 body: { name: newName.trim(), start_date: today, end_date: today },
             })
@@ -37,20 +36,8 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
         }
     }
 
-    async function deletePlan(plan) {
-        if (!confirm(`删除计划「${plan.name || '未命名'}」? 其下所有餐次也会删除。`)) return
-        try {
-            await call(api.del, `/meal-plans/${plan.id}`)
-            if (activePlanId === plan.id) onSelect(null)   // 删的是当前筛选的 → 回到全部
-            onChanged?.()
-        } catch (e) {
-            alert(e.message || '删除失败')
-        }
-    }
-
     return (
         <div className="mb-4 flex flex-wrap items-center gap-2">
-            {/* 全部 */}
             <button
                 className={`rounded-full px-3 py-1 text-sm ${activePlanId === null
                         ? 'bg-slate-900 text-white'
@@ -61,29 +48,19 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                 全部计划
             </button>
 
-            {/* 各 plan */}
             {plans.map((p) => (
-                <div
+                <button
                     key={p.id}
-                    className={`group flex items-center gap-1 rounded-full px-3 py-1 text-sm ${activePlanId === p.id
+                    className={`rounded-full px-3 py-1 text-sm ${activePlanId === p.id
                             ? 'bg-slate-900 text-white'
                             : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                         }`}
+                    onClick={() => onSelect(p.id)}
                 >
-                    <button onClick={() => onSelect(p.id)}>
-                        {p.name || `计划 #${p.id}`}
-                    </button>
-                    <button
-                        className="opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-                        onClick={() => deletePlan(p)}
-                        title="删除计划"
-                    >
-                        <Trash2 className="h-3 w-3" />
-                    </button>
-                </div>
+                    {p.name || `计划 #${p.id}`}
+                </button>
             ))}
 
-            {/* 新建 */}
             <button
                 className="flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-3 py-1 text-sm text-slate-500 hover:bg-slate-50"
                 onClick={() => setShowCreate(true)}
@@ -91,7 +68,6 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                 <Plus className="h-3.5 w-3.5" /> 新建计划
             </button>
 
-            {/* 创建弹窗 */}
             <Dialog open={showCreate} onOpenChange={(o) => { setShowCreate(o); if (!o) { setNewName(''); setError(null) } }}>
                 <DialogContent>
                     <DialogHeader>
@@ -124,5 +100,27 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                 </DialogContent>
             </Dialog>
         </div>
+    )
+}
+
+// 删除按钮(选中某plan后显示在右上角)—— 独立导出
+export function DeletePlanButton({ plan, onDeleted }) {
+    const { call } = useApi()
+    async function del() {
+        if (!confirm(`删除计划「${plan.name || '未命名'}」? 其下所有餐次也会一并删除。`)) return
+        try {
+            await call(api.del, `/meal-plans/${plan.id}`)
+            onDeleted?.()
+        } catch (e) {
+            alert(e.message || '删除失败')
+        }
+    }
+    return (
+        <button
+            className="rounded-md border border-red-200 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
+            onClick={del}
+        >
+            删除此计划
+        </button>
     )
 }
