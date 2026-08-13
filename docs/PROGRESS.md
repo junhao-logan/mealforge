@@ -481,3 +481,67 @@
 - **中文标点混入代码**：全角顿号 `、` 等会导致 `SyntaxError: invalid character`，
   粘贴后扫一眼行尾
 - **测试脚本不要硬编码会被删除的 id**：应在脚本内先创建再操作，保证可重复运行
+
+
+---
+
+## Week 10 — 前端全功能开发 ✅ 完成
+
+**状态**:6 个功能页全部完成,前端功能完整。核心闭环(库存→AI→排餐→扣库存→采购→回流→概览)前端全打通。
+
+### 技术栈落地
+- **React + Vite + 纯 JS**(不上 TS,降复杂度)
+- **Tailwind + shadcn/ui**(Base UI + Nova 预设)—— AI 生成友好、业界标准、复制源码进项目=拥有代码
+- **react-router v7**(声明式 `<BrowserRouter>/<Routes>/<Route>/<Outlet>`,包名 `react-router` 非 `react-router-dom`)
+- **Clerk 认证**:`useApi` hook 封装 `getToken()` 自动注入 `Authorization: Bearer`
+
+### 文件结构(职责分层,呼应后端 app/ 分模块)
+```
+frontend/src/
+├── main.jsx (ClerkProvider + BrowserRouter)
+├── App.jsx (路由表 + SignedIn/SignedOut 保护)
+├── lib/api.js (统一后端调用: base URL + token + ApiError + extractDetail)
+├── lib/expiry.js (过期渐变色 + 已过期/临期标签, 纯函数)
+├── lib/dateRange.js (周/天日期工具, 各视图复用)
+├── hooks/useApi.js (拿 token + 调 api)
+├── hooks/useDebounce.js (搜索防抖 300ms)
+├── components/layout/ (Sidebar 集中 NAV_ITEMS, AppLayout Outlet)
+├── components/{inventory,recipes,mealplan,dashboard,shopping}/ (各页组件)
+└── pages/ (6 个页面)
+```
+
+### 6 个页面
+1. **今日概览** `/` — 营养汇总(daily-summary **缓存端点**)+ 今日餐次 + 临期提醒。Promise.all 4 接口并行。复用 MealEntryCard/MacroCard。
+2. **库存** `/inventory` — 模拟冰箱**三区**(常温 pantry/冷藏 fridge/冷冻 freezer)+ **未指定区**;卡片背景按剩余天数**绿→红渐变**(方案B,连续 HSL);两步式加库存(前缀搜索公共库 + visibility 分组 + 搜不到可创建);**卡片点击编辑**(数量/过期日/区域,PATCH);**已过期/临期**标签(前端 daysUntil 算,不依赖后端 expiry_status)。
+3. **菜谱** `/recipes` + 详情 `/recipes/:id` — **反向推荐三态可视化**(have/partial/missing,绿勾/黄杠/红叉);我的菜谱;**AI 生成菜谱**(真调 Gemini);详情页(营养4格+配料+AI做法 instructions)。
+4. **餐计划** `/meal-plans` — **天/周视图 + 周横竖切换**(4 视图,月视图留 backlog);**多 plan 管理**(建/删/筛选,层次C 默认合并+可筛选);**AI 生成周计划**;手动排餐**选 plan**;完成**扣库存**;删除。架构预留 viewMode 扩展点。
+5. **采购** `/shopping` — 缺口预览(库存预扣视图);生成清单(自动算缺口);**勾选结算**(批量勾选→一次结算→每样分配**储存区+过期日**→回流);缺口**加入清单**(可调量);重算/删除。
+6. **营养目标** `/nutrition` — TDEE 表单(身高/体重/年龄/性别/活动量/目标)→ PUT body-metrics → POST compute(Mifflin-St Jeor)→ 显示每日目标。设目标后今日概览进度条有基准。
+
+### 后端增强(Week 10 配套)
+- **D-R1 升级**:反向推荐从"只看有无"→"看克数"三态(have/partial/missing),返回完整食材清单 + 向后兼容 missing_count/missing_ingredients。+2 测试。
+- **新增 `GET /meal-plans/entries?start=&end=`**:日历视图数据源,一次 join 查跨所有 plan 的餐次(带菜名/recipe_id),无 N+1。各视图复用。
+- **add_entry 自动扩展**:超 plan 日期范围从"报 422"改"自动扩展"(与 quick-log 一致),统一排餐行为。
+- **shopping purchase 加 location + expires_at**:结算回流时带储存区和过期日,回流批次直接归区(修复"回流批次无 location 落未指定区")。
+
+### Week 10 踩坑(前端)
+- **后端路由 prefix 易猜错**:nutrition=`/users/me`、shopping=`/shopping-lists`;前端拼路径前先 `grep prefix app/<domain>/router.py`
+- **文件位置铁律**:代码全在 `src/`,`public/` 只放静态资源(踩过页面误放 public/pages)
+- **shadcn 命令必须在 `frontend/` 跑**(先 pwd),根目录跑会误建 `next-app/`(rm -rf 删,勿 commit)
+- **DialogTrigger asChild 内用 `<span role="button">`** 不用 `<button>`(button 套 button 报错)
+- **shadcn destructive badge** 浅红底红字,自定义深红底要配白字
+- **api 封装 put 方法**曾漏(body-metrics 用 PUT)
+- **Vite 缓存**:改文件不生效时 kill 端口 + `rm -rf node_modules/.vite` 重启
+
+### 遗留 / backlog
+- 食材搜索前缀匹配(搜不到中间词,需 pg_trgm)
+- AddEntryDialog 逐个查菜谱 detail 拿 variant_id(N+1,后端列表可带 variant_id)
+- 月视图 + 月下钻;plan description 字段(需 model+迁移);多命名 plan 增强
+
+### 下一步:Week 11 部署
+- Python 3.14→3.12(部署前必做)
+- Fly.io 部署(DEP1)+ Postgres 托管 + Redis
+- 前端 build 托管;环境变量/密钥(Clerk/Gemini/DATABASE_URL);CORS/Clerk 域名白名单
+- **部署不影响本地开发**:本地照常 dev/改/测,push 后线上自动更新
+
+**Week 10 状态:前端 6 页全功能完成 ✅**

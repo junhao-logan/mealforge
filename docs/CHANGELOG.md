@@ -666,3 +666,46 @@ Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成�
 **下一步**：Week 10 前端 / Week 11 部署
 
 **Week 9 状态：测试完整度 + Redis 缓存与失效策略完成 ✅**
+
+
+---
+
+## Week 10 — 前端全功能(6 页)+ 后端配套增强
+
+**前端**(React+Vite+纯JS + Tailwind+shadcn):
+- 骨架:api.js 统一调用 + useApi 注入 Clerk token + AppLayout/Sidebar + 路由
+- 库存:三区渐变 + 未指定区 + 两步式加 + 卡片编辑 + 过期/临期标签
+- 菜谱:反向推荐三态 + 我的菜谱 + AI 生成 + 详情页(营养/配料/做法)
+- 餐计划:天/周视图 + 周横竖 + 多plan(建/删/筛选)+ AI周计划 + 排餐选plan + 完成扣库存
+- 采购:缺口预览 + 生成清单 + 勾选结算(分配区域/过期日)+ 回流 + 加入清单
+- 今日概览:营养汇总(缓存端点)+ 今日餐次 + 临期
+- 营养目标:TDEE 表单(Mifflin-St Jeor)
+
+**后端配套**:
+- D-R1 升级:反向推荐三态(have/partial/missing)+ 完整食材清单,向后兼容,+2 测试
+- 新增 GET /meal-plans/entries?start=&end=(日历数据源,一次 join 无 N+1)
+- add_entry 超范围自动扩展(与 quick-log 一致)
+- shopping purchase 加 location + expires_at 透传(回流批次归区带过期日)
+
+**踩坑记录**:
+- 后端路由 prefix 易猜错:nutrition=/users/me、shopping=/shopping-lists;前端拼路径前先 grep prefix
+- 文件位置铁律:代码全在 src/,public/ 只放静态资源(踩过页面误放 public/pages)
+- 附件名前缀(layout_/pages_)只为区分目录,放项目时去前缀放对目录
+- shadcn 命令必须在 frontend/ 跑(先 pwd),根目录跑会误建 next-app/(要 rm -rf 删,勿 commit)
+- DialogTrigger asChild 内用 <span role="button"> 不用 <button>(button 套 button 报错)
+- shadcn destructive badge 是浅红底红字,自定义深红底要配白字(否则文字看不见)
+- api 封装漏了 put 方法(body-metrics 用 PUT),补上
+- limit 上限:/ingredients le=100,传 200 报 422
+- Vite 旧进程/缓存:改文件不生效时 kill 端口 + rm -rf node_modules/.vite 重启
+- 回流批次无 location → 落"未指定区";结算选区修复
+- 采购缺口"没同步"实为回流成功但无 location 没显示在三区(排查:查 DB location IS NULL)
+
+**遗留 / backlog**:
+- 食材搜索前缀匹配(搜不到中间词,需 pg_trgm)
+- AddEntryDialog 逐个查菜谱 detail 拿 variant_id(N+1,后端列表可带 variant_id)
+- 月视图 + 月下钻;plan description 字段(需 model+迁移);多命名 plan 增强
+- 缓存失效第二版;Python 3.14→3.12;全仓 lint
+
+**下一步**:Week 11 部署(Fly.io + Python 3.12 + S3/R2)
+
+**Week 10 状态:前端 6 页全功能完成 ✅**

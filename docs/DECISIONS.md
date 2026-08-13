@@ -481,3 +481,47 @@
 - **中文标点混入代码**：全角顿号 `、` 等会导致 `SyntaxError: invalid character`，
   粘贴后扫一眼行尾
 - **测试脚本不要硬编码会被删除的 id**：应在脚本内先创建再操作，保证可重复运行
+
+
+---
+
+## F 系列 — 前端决策(Week 10)
+
+### D-F1 — 技术栈:React+Vite+纯JS + Tailwind+shadcn/ui ✅ Week 10
+- **纯 JS 不上 TS**:降复杂度,作品集重点是全栈闭环非类型体操。
+- **shadcn/ui(复制源码模式)**:组件源码进项目 = 拥有代码可改;AI 生成友好;业界主流。
+- **不用 shadcn Select,用原生 `<select>`**:简单可靠,少配置。
+- 坑:`DialogTrigger asChild` 内必须用 `<span role="button">` 不用 `<button>`(否则 button 套 button)。
+
+### D-F2 — api 统一封装 + useApi hook ✅ Week 10
+- 所有请求走 `lib/api.js`(base URL + JSON + token + ApiError)。页面不直接 fetch。
+- `useApi().call(apiFn, path, opts)` 自动从 Clerk 取 token 注入。
+- `extractDetail`:FastAPI 错误 detail 可能是数组/对象,统一提成可读字符串(避免 `[object Object]`)。
+- api 方法:get/post/put/patch/del(put 曾漏,body-metrics 需要)。
+
+### D-F3 — 库存三区渐变(方案B) ✅ Week 10
+- location(pantry/fridge/freezer)→ 三竖区,响应式 grid 3→2→1 列(竖排堆叠不横滑)。
+- 卡片背景按剩余天数连续渐变:0天红→14天绿(HSL hue 0→120),无过期日中性灰排最后。
+- **不加"调料区"**:分区维度是存储温度,混入食材类型会破坏一致性;需冷藏的调料归冷藏区。
+- **未指定区**:location 为 null/其他的落这里(采购回流未选区的);卡片可编辑改区归位。
+- 过期标签前端算(daysUntil<0=已过期红/≤3天=临期橙),不依赖后端 expiry_status(它只有临期无过期)。
+
+### D-F4 — 加库存两步式 + 库存编辑 ✅ Week 10
+- 加:视图1 选食材(后端 `?name=` 前缀搜索 + visibility 分"我的/公共" + 搜不到可创建)→ 视图2 填详情。弹窗内两视图切换(step state),不做整页路由。防抖 useDebounce 300ms。
+- 编辑:卡片点击 → PATCH /inventory/{id} 改数量(盘点,可为0)/过期日/区域。
+
+### D-F5 — 餐计划多视图 + 多plan ✅ Week 10 / 月视图 backlog
+- 视图:天(竖)+ 周(横/竖),共 4 种。切换器两个开关 [天|周][竖|横](横竖仅周视图)。月视图不做。
+- 架构预留:viewMode state / 数据层(/entries 按范围取)与视图解耦 / MealEntryCard 复用 / dateRange 工具。加月视图=加渲染分支,不碰数据。
+- 多 plan 层次C:默认合并显示所有 plan + PlanBar 可筛选单个。plan 只填 name(description 需改 model+迁移,记 backlog),日期用今天+排餐自动扩展。删除 plan 移到选中后右上角红按钮(防误触)。
+- AI 生成建新 plan;手动排餐用 `POST /{plan_id}/entries` 选 plan(非 quick-log)。
+
+### D-F6 — 采购结算流程 ✅ Week 10
+- 清单项 = 勾选 + 输入买入量(非逐个"买了")。底部一次性"结算"。
+- 结算弹窗:勾选项列出,每样分配储存区(默认冷藏)+ 可填过期日 → 逐个 purchase 回流(前端组织批量,后端逐项端点)。
+- 后端 purchase 加 location/expires_at 透传 → 回流批次直接归区带过期日(修复原"回流无 location 落未指定区")。
+- 缺口预览项可"加入清单"(可调量,默认缺口量)。
+
+### D-F7 — 营养目标页 ✅ Week 10
+- 流程:PUT /users/me/body-metrics(存身体数据)→ POST /users/me/nutrition-goal/compute(算 TDEE,身体数据没填齐后端 422)。
+- **端点前缀提醒**:nutrition router prefix = `/users/me`(非 `/nutrition`);shopping = `/shopping-lists`(非 `/shopping`)。前端拼路径前务必确认后端 prefix。
