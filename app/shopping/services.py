@@ -209,6 +209,8 @@ async def mark_item_purchased(
     user_id,
     purchased_amount: Decimal | None = None,
     purchased_unit: str = "g",
+    location: str | None = None,
+    expires_at: date | None = None,
 ) -> ShoppingListItem:
     """打勾购买: 标记已购 + (若入库项)回流建库存批次(I9)。
 
@@ -235,6 +237,8 @@ async def mark_item_purchased(
                 input_amount=purchased_amount,
                 input_unit=purchased_unit,
                 purchased_at=date.today(),
+                location=location,
+                expires_at=expires_at,
             ),
         )
     await db.flush()

@@ -185,6 +185,8 @@ async def purchase_item(
         db, item, user.id,
         purchased_amount=payload.purchased_amount,
         purchased_unit=payload.purchased_unit,
+        location=payload.location,
+        expires_at=payload.expires_at,
     )
     await db.commit()
     await db.refresh(item)

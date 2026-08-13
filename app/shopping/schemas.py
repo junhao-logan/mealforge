@@ -86,9 +86,11 @@ class ShoppingItemCreate(BaseModel):
 
 
 class ShoppingItemPurchase(BaseModel):
-    """打勾购买。入库项需填实际购买量(→ I9 回流)。"""
+    """打勾购买。入库项需填实际购买量(→ I9 回流)+ 可选储存区。"""
     purchased_amount: Decimal | None = Field(default=None, gt=0)
     purchased_unit: str = Field(default="g", max_length=20)
+    location: str | None = Field(default=None, pattern="^(fridge|freezer|pantry)$")
+    expires_at: date | None = None
 
 
 class PreviewItem(BaseModel):

@@ -31,3 +31,13 @@ export function expiryColor(days) {
 export function sortKey(days) {
     return days === null || days === undefined ? Infinity : days
 }
+
+// 过期标签: 已过期(days<0) / 临期(0<=days<=EXPIRING_DAYS) / 正常。
+// 供卡片显示不同标签(修复"过期了却显示临期")。
+const EXPIRING_DAYS = 3
+export function expiryLabel(days) {
+    if (days === null || days === undefined) return null
+    if (days < 0) return { text: '已过期', variant: 'expired' }
+    if (days <= EXPIRING_DAYS) return { text: '临期', variant: 'expiring' }
+    return null
+}
