@@ -457,6 +457,10 @@
 | 11 | `create_async_engine` 无 `connect_args`，接 Neon 需加 `statement_cache_size=0` | DEP3 | ⏳ Week 11 Step 2 |
 | 12 | 全仓 lint 欠账（CI 仅覆盖 shopping/ingredients/recipes/ai/meal_plans/tests） | Week 7+ | ⏳ 低 |
 | 13 | 缓存失效第二版：variant 营养变更 → 反查受影响天精准失效 | D-P2 | ⏳ 低（TTL 兜底中） |
+| 14 | README 严重过期：写"Week 4 of 12"，Roadmap 5-12 周全未勾选；技术栈误列 TypeScript（实为纯 JS，见 D-F1）、Celery（从未引入）、Anthropic Claude API（实为 Google Gemini） | Week 1 | ⏳ Week 11 Step 10（招聘官第一入口，优先级高） |
+| 15 | `VITE_API_URL` 缺失时静默退回 `http://127.0.0.1:8000`，生产构建应直接失败 | DEP4 | ⏳ Week 11 Step 6 |
+| 16 | ~~`frontend/` 无 `.env.example`（构建期变量无清单）~~ | DEP8 | ✅ 2026-08-14 |
+| 17 | `frontend/index.html` 的 `<title>` 仍为脚手架默认值 `frontend` | Week 10 | ⏳ Week 11 Step 6（一行） |
 
 ---
 
@@ -609,6 +613,37 @@ grep -c cp314 uv.lock    # 重建前 280 → 重建后应为 0
 **改动面（四处）**：新建 `.python-version` / `pyproject.toml` 加上界 /
 删除并重建 `uv.lock` / CI 改为读文件。
 
+**副作用（事后发现，必须记录）：重建 lock 顺带升级了 26 个依赖**
+
+`rm uv.lock` 不只是"换 Python 重新解析"，而是**丢弃所有已固定版本，
+重新解析到当前约束允许的最新版**。本项目依赖全用 `>=` 下界约束，故全线上浮。
+包总数未变（57 → 57，无新增/移除），但 26 个版本变动，其中高风险的六个：
+
+| 包 | 旧 | 新 | 风险点 |
+| --- | --- | --- | --- |
+| `cryptography` | 48.0.0 | **50.0.0** | 跨两个大版本；`pyjwt[crypto]` 依赖它做 JWKS 验签 —— 认证链路地基 |
+| `starlette` | 1.2.0 | **1.6.0** | 跨四个小版本；CORS 中间件与 TestClient 都在这层 |
+| `ruff` | 0.15.15 | **0.16.3** | lint 规则随版本增删（尤其 `UP`），CI lint 步骤可能新报错 |
+| `fastapi` | 0.136.3 | 0.141.1 | 跟随 starlette |
+| `pytest` | 9.0.3 | 9.1.1 | 测试框架自身 |
+| `uvicorn` | 0.48.0 | 0.52.3 | 运行时 |
+
+其余为补丁级（sqlalchemy 2.0.50→2.0.52、alembic 1.18.4→1.19.1、
+redis 8.0.0→8.1.0、google-genai 2.16.0→2.18.1 等）。
+
+**教训（流程层面）**：`rm uv.lock` 把两个逻辑变更捆进了一次改动 ——
+「Python 版本收敛」+「全依赖升级」，违反本项目 one logical change per commit 的约定。
+更精细的做法是：先只加约束跑 `uv lock`（uv 会尽量保留已有版本），
+确认通过后再单独做一次依赖升级，两次 commit 分开。
+
+**为何不回退**：部署前把依赖刷到最新本身合理，回退反而引入新的不确定性。
+正确应对是**认真验证**（本地 pytest + 本地跑一次 CI 同款 ruff 命令 + 看 CI），
+并在 commit message 中如实写明升级范围，而非当作单纯的 Python 版本变更。
+
+**测试覆盖的盲区**：测试用 `dependency_overrides` 绕过 Clerk，
+故"93 测试全绿"**不能**证明 cryptography 50 下的真 token 验签无问题。
+该风险只能在 Step 5 部署后用真 token 端到端验证。
+
 **备选**：留在 3.14（部分库需现场编译，`google-genai` 已报 DeprecationWarning）；
 升到 3.13（生态仍在追赶）；只建 `.python-version` 不加上界（lock 仍双分支，治标不治本）。
 
@@ -651,8 +686,20 @@ grep -c cp314 uv.lock    # 重建前 280 → 重建后应为 0
   但多一台机器成本 + nginx 配置；而 CORS 本项目 Week 5 已调通，不构成新增成本。
 - **必须配 SPA fallback 到 `index.html`** —— react-router 是客户端路由，
   否则用户直接访问 `/recipes/12` 会 404。
-- **注意**：`VITE_API_BASE_URL` 是 **build-time** 注入（字面替换进 bundle），
-  非运行时读取。后端域名变更必须重新 build 重新部署，改环境变量无效。
+- **构建期变量（已核对实际代码，非 `VITE_API_BASE_URL`）**：
+  - `VITE_API_URL` —— 后端根地址，见 `frontend/src/lib/api.js`
+  - `VITE_CLERK_PUBLISHABLE_KEY` —— 见 `frontend/src/main.jsx`
+  两者均为 **build-time** 注入（`npm run build` 时字面替换进 bundle），
+  **非运行时读取**。后端域名变更必须重新 build 重新部署，改环境变量无效。
+- **⚠️ 静默失效隐患（技术债 #15）**：`api.js` 现写法为
+  `import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'`。
+  生产构建若漏配该变量，**构建成功、页面正常打开**，
+  但所有请求指向 localhost 失败 —— 报错表现为网络错误，
+  会误导排查方向到后端日志，而后端其实健康。
+  **与 DEP8 中 `GEMINI_API_KEY` 默认空值是同一类失效模式**：
+  启动不报错，只在用户操作时暴露。Step 6 改为生产构建缺变量即失败。
+  对照 `VITE_CLERK_PUBLISHABLE_KEY` 缺失时 `main.jsx` 直接 throw ——
+  那才是正确的失效方式。
 
 ### DEP5 — Clerk：分两阶段切换，不与首次部署同时进行
 
@@ -696,6 +743,13 @@ grep -c cp314 uv.lock    # 重建前 280 → 重建后应为 0
 **启动即失败远优于运行时静默失效** —— 这类"只在用户操作时暴露"的配置缺失最难排查。
 补齐时按"本地专用 / 部署需改"分组，并就地标注两条既有教训：
 `localhost` ≠ `127.0.0.1`（CORS 与 azp 两处都敏感）、模型串号必须可配置（模型会下线）。
+
+**前端侧同一问题（2026-08-14 补）**：后端有 `.env.example` 而 `frontend/` 没有，
+但前端有两个必需的构建期变量（`VITE_CLERK_PUBLISHABLE_KEY` / `VITE_API_URL`）。
+Step 6 在 Cloudflare Pages 配置构建环境变量时需要这份清单，故补建
+`frontend/.env.example`，并在其中写明 build-time 注入语义与
+`VITE_` 前缀会进 bundle（只放公开值）这两条约束。
+`frontend/.gitignore` 的 `*.local` 规则已能挡住 `.env.local`，密钥不会误提交。
 
 ### Week 11 部署顺序（执行清单）
 
