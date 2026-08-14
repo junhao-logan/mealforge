@@ -2,7 +2,11 @@
 name = "mealforge"
 version = "0.1.0"
 description = "AI-powered meal planning platform"
-requires-python = ">=3.12"
+# 上界 <3.13 是刻意的: 本地 / CI / Docker 三处必须解析出同一棵依赖树。
+# 只写下界时 uv 会挑系统最新版(曾解析到 3.14.5), 并在 uv.lock 中生成
+# 3.14 与 3.12 两套 resolution-markers, 导致 C 扩展依赖(asyncpg /
+# pydantic-core / sqlalchemy / cryptography)在不同环境装的是不同二进制。
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
