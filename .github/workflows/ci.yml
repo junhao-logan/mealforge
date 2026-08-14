@@ -39,8 +39,15 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Set up Python
-        run: uv python install 3.12
+      # 不带版本号: uv 自动读仓库根目录的 .python-version。
+      # 硬编码版本号会与本地形成两个真相源 —— 曾导致本地 3.14.5 / CI 3.12
+      # 长期漂移而无人察觉(DEP0)。
+      - name: Set up Python (version from .python-version)
+        run: uv python install
+
+      # 打印实际版本, 让漂移在日志里可见而非隐形
+      - name: Verify Python version
+        run: uv run python -V
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
@@ -50,5 +57,5 @@ jobs:
         run: uv run ruff check app/shopping app/ingredients app/recipes app/ai app/meal_plans tests
 
       - name: Run tests with coverage
-        # --cov-fail-under: 覆盖率低于阈值则 CI 失败, 防止倒退。当前 78%, 门槛设 75 留余量
+        # --cov-fail-under: 覆盖率低于阈值则 CI 失败, 防止倒退。当前 86%, 门槛设 75 留余量
         run: uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=75
