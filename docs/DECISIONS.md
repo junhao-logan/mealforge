@@ -2,7 +2,8 @@
 
 > 本文件是所有架构决策的**唯一记录处**（single source of truth）。
 > 记录内容：决策本身、理由、备选方案，以及后续实现中的**修订**。
-> 决策编号：`D` = 环境与架构（Week 1-4，含 D/N/P 系列），`I` = 库存与采购（Week 5+）。
+> 决策编号：`D` = 环境与架构（Week 1-4，含 D/N/P 系列），`I` = 库存与采购（Week 5+），
+> `AI` / `R` / `P` / `F` = AI 生成 / 菜谱内容 / 性能缓存 / 前端，`DEP` = 部署（Week 11）。
 > 设计在实现中演进是正常的 —— 修订会保留原条目并标注，不做无痕修改。
 
 ## 目录
@@ -10,8 +11,13 @@
 - [D 系列 — 环境与架构决策（Week 1-4）](#d-系列--环境与架构决策week-1-4)
 - [修订记录](#修订记录)
 - [I 系列 — 库存与采购决策（Week 5+）](#i-系列--库存与采购决策week-5)
+- [AI 系列 — AI 生成决策（Week 7+）](#ai-系列--ai-生成决策week-7)
+- [R 系列 — 菜谱内容决策](#r-系列--菜谱内容决策)
+- [P 系列 — 性能与缓存决策（Week 9）](#p-系列--性能与缓存决策week-9)
 - [技术债](#技术债)
 - [流程笔记](#流程笔记)
+- [F 系列 — 前端决策(Week 10)](#f-系列--前端决策week-10)
+- [DEP 系列 — 部署决策（Week 11）](#dep-系列--部署决策week-11)
 
 ---
 
@@ -446,6 +452,11 @@
 | 6 | 零余量批次与 90 天前流水的定期清理任务 | I2 | ⏳ Week 7（引入后台任务时） |
 | 7 | `quick-log` 返回的 entry 不含 `meal_plan_id`，无法直接 complete | Week 5 测试发现 | ⏳ 低（Week 10 前端时补） |
 | 8 | ~~`location` / `notes` 未实现~~ | Week 5 | ✅ 2026-07-23 定案：`location` 已加，`notes` 不做 |
+| 9 | ~~Python 版本未锁定（`.python-version` 缺失 → 本地 3.14.5 / CI 3.12 长期漂移）~~ | Week 1 | ✅ 2026-08-13（DEP0） |
+| 10 | ~~`.env.example` 缺 4 个 config 项（CORS 一项 + Gemini 三项）~~ | Week 7、Week 10 | ✅ 2026-08-13（DEP8） |
+| 11 | `create_async_engine` 无 `connect_args`，接 Neon 需加 `statement_cache_size=0` | DEP3 | ⏳ Week 11 Step 2 |
+| 12 | 全仓 lint 欠账（CI 仅覆盖 shopping/ingredients/recipes/ai/meal_plans/tests） | Week 7+ | ⏳ 低 |
+| 13 | 缓存失效第二版：variant 营养变更 → 反查受影响天精准失效 | D-P2 | ⏳ 低（TTL 兜底中） |
 
 ---
 
@@ -526,138 +537,193 @@
 - 流程:PUT /users/me/body-metrics(存身体数据)→ POST /users/me/nutrition-goal/compute(算 TDEE,身体数据没填齐后端 422)。
 - **端点前缀提醒**:nutrition router prefix = `/users/me`(非 `/nutrition`);shopping = `/shopping-lists`(非 `/shopping`)。前端拼路径前务必确认后端 prefix。
 
-
 ---
 
-## DEP 系列 — 部署决策(Week 11)
+## DEP 系列 — 部署决策（Week 11）
 
-### DEP0 — Python 版本:3.14.5 → 3.12(部署前置)
+> 目标：把 MealForge 部署上线，产出面试可用的公网链接。
+> 编号 DEP0–DEP8，按"准备 → 平台 → 数据层 → 前端 → 认证 → 运维"顺序排列。
 
-- **背景**:3.14.5 是 Week 1 建项目时 uv 自动抓取的最新版,并非主动选型。
-- **决策**:降至 3.12,并在 `pyproject.toml` 锁定区间 `>=3.12,<3.13`。
-- **理由**:
-  - 部署阶段首要指标是**可重现性**,不是版本新。
-  - 3.12 生态最成熟:asyncpg / pydantic-core / cryptography 等 C 扩展依赖
-    均有预编译 wheel,无需构建时现场编译;`python:3.12-slim` 官方镜像稳定。
-  - 3.13 的 free-threading 仍在铺开,部分 C 扩展 wheel 覆盖不完整。
-  - 上界 `<3.13` 是刻意的:防止本地 / CI / Docker 三处环境解析出不同依赖树,
-    出现"本地绿 CI 红"。
-- **备选**:留在 3.14(部分库无 wheel,google-generativeai 已报 DeprecationWarning)、
-  升到 3.13(生态仍在追赶)。
-- **改动面**:`.python-version` / `pyproject.toml` / `uv.lock`(重建) /
-  GitHub Actions workflow —— 四处必须同步,漏 CI 那处会表现为"本地绿 CI 红"。
+### DEP0 — Python 版本收敛：双层约束锁定 3.12 ✅ 2026-08-13
 
-### DEP1 — 后端平台:Fly.io
+**审计发现（部署前环境一致性检查，与预期不符）**
 
-- Docker 原生、region 可选、CLI 体验好、按秒计费。
-- 备选:Railway(更简单但免费额度收紧)、Render(冷启动更慢)、
-  自建 VPS(运维面过大,单人项目承担不起)。
+原以为的问题是"`.python-version` 锁了 3.14，改成 3.12 即可"。读代码后发现实情不同：
 
-### DEP2 — 对象存储:本周不做,推迟 ⏸
-
-- **理由:项目当前没有任何文件上传功能**(菜谱图片在 Brief 中但从未实现)。
-  为不存在的功能选型是过度设计,违背既定的"演进式设计,推迟复杂度"原则。
-- **若将来做则选 Cloudflare R2**:零 egress 费(图片读多写少,egress 是主要成本);
-  S3 兼容 API 意味着迁回 S3 只改 endpoint,锁定风险低。
-- **面试点**:能说清"为什么现在不做"和"做的话怎么选",
-  比硬塞一个用不上的集成更有说服力。
-
-### DEP3 — 数据库:Neon Free(非 Fly Postgres)
-
-- **选定 Neon Free**:$0,0.5GB 存储 + 100 CU-hours/月,scale-to-zero。
-  本项目数据量(USDA 食材子集 + 用户数据)远低于上限。
-- **备选一 Fly Managed Postgres**:$38/月起 —— 作品集场景成本不合理。
-- **备选二 Fly 非托管 Postgres**:~$2-7/月,但官方已标 legacy 且明确不提供支持,
-  备份 / 版本升级 / 灾备全部自理 —— 单人项目承担不起这个运维面。
-- **代价(必须处理)**:
-  1. scale-to-zero 冷启动 300-500ms。
-  2. **pooled 连接走 PgBouncer 事务模式,不支持 prepared statements**;
-     asyncpg 默认开 statement cache,需设 `statement_cache_size=0`,
-     否则报 `prepared statement "__asyncpg_stmt_N__" does not exist`。
-  3. Neon region 需与 Fly app region 对齐,否则每次查询多几十毫秒,
-     daily-summary 这类多查询端点会被放大。
-
-### DEP4 — 前端托管:Cloudflare Pages
-
-- 免费 + 全球 CDN + push 自动构建;首屏速度直接影响招聘官第一印象。
-- **备选**:Fly 上起第二个 app 反代 `/api` 做同源(可彻底消灭 CORS/azp 配置),
-  但多一台机器成本 + nginx 配置;而 CORS 本项目 Week 5 已调通,不构成新增成本。
-- **必须配 SPA fallback 到 `index.html`** —— react-router 是客户端路由,
-  否则用户直接访问 `/recipes/12` 会 404。
-
-### DEP5 — Clerk:分两阶段切换,不与首次部署同时进行
-
-- **阶段一(Step 0-10)**:沿用 dev instance + 免费域名(`*.fly.dev` / `*.pages.dev`),
-  先把部署链路整体跑通。
-- **阶段二(Step 11)**:买域名 → 开 Clerk production instance → 切 issuer / key / azp。
-- **理由:一次只改一个变量**。首次部署时新变量已有 5 个
-  (镜像 / Neon 连接 / Upstash / CORS / 前端域名),
-  若同时更换认证,登录返回 401 时无法定位是哪一层。
-  参照 Week 5 的"假 CORS"教训 —— 表象与真因分离的问题必须靠隔离变量来排查。
-- **待验证前提**:dev instance 是否允许非 localhost origin。
-  须在 Step 6 之前于 Clerk Dashboard 确认;
-  若不允许,则 Step 11 需提前至 Step 6,域名要提早购买。
-
-### DEP6 — 迁移执行:Fly `release_command` 自动 `alembic upgrade head`
-
-- 保证代码与 schema 永远同步,不会出现"代码上线了但表没建"。
-- **代价**:坏迁移会阻断整次部署;失败不会自动 downgrade。
-- **缓解**:沿用既有 Alembic 验证清单(apply 前 `grep -A8 "def upgrade"` 确认非 `pass`、
-  看 `Running upgrade X -> Y` 那行),
-  并保留 `fly ssh console` 手动跑迁移的兜底路径。
-
-### DEP7 — 后端常驻:`min_machines_running = 1`,不启用 scale-to-zero
-
-- 省下的几美元 < 招聘官点开链接白屏 8 秒、误以为项目已挂的损失。
-- **这是面向真实用户(招聘官)的决策,不是纯技术最优解** ——
-  与项目一贯的"先从真实用户视角推理"原则一致。
-
-  ---
-
-## DEP 系列 — 部署决策(Week 11)
-
-### DEP0 — Python 版本收敛:双层约束锁定 3.12 ✅
-
-**审计发现(部署前环境一致性检查)**
-
-原以为的问题是"`.python-version` 锁了 3.14 需要改",实际情况不同:
-
-1. **`.python-version` 从未存在**。`pyproject.toml` 写的是 `requires-python = ">=3.12"`,
-   只有下界,uv 遂挑选系统上最新的可用版本 —— 3.14.5。
-   问题不是"锁错了",而是**根本没锁**。
+1. **`.python-version` 从未存在**（`.gitignore` 中也未排除）。
+   `pyproject.toml` 写的是 `requires-python = ">=3.12"`，只有下界没有上界，
+   uv 遂挑选系统上可用的最新版本 —— 3.14.5。
+   **问题不是"锁错了版本"，而是"根本没锁"**，因此修复方式是补上缺失的约束而非改一个值。
 2. **CI 一直硬编码 `uv python install 3.12`**。
-   即:**本地跑 3.14.5,CI 跑 3.12,已漂移数周而未被发现**。
+   即：**本地跑 3.14.5、CI 跑 3.12，已漂移数周而未被察觉**。
 3. **`uv.lock` 因上界开放而生成两套 resolution-markers**
-   (`>= '3.14'` 与 `< '3.14'`),实测含 280 条 cp314 wheel、137 条 cp312 wheel。
-   受影响的 14 个包全是 C 扩展依赖,含
-   **asyncpg / pydantic-core / sqlalchemy / cryptography** ——
-   正是数据层与认证层的地基,本地与 CI 装的是不同的编译产物。
+   （`python_full_version >= '3.14'` 与 `< '3.14'`）。实测：
 
-**为什么它一直没炸**:这些依赖在两个版本上行为恰好一致,且 CI 长期绿灯提供了
-"代码能在 3.12 上运行"的间接证据。但这是运气,不是设计。
+   | 指标 | 数量 |
+   | --- | --- |
+   | cp312 wheel 条目 | 137 |
+   | **cp314 wheel 条目** | **280** |
 
-**决策:双层约束,两处都做**
+   含 3.14 专属 wheel 的 14 个包全是 C 扩展依赖：
+   `asyncpg` / `cffi` / `charset-normalizer` / `coverage` / `cryptography` /
+   `greenlet` / `httptools` / `markupsafe` / `pydantic-core` / `pyyaml` /
+   `sqlalchemy` / `uvloop` / `watchfiles` / `websockets`
+   —— **asyncpg、pydantic-core、sqlalchemy、cryptography 正是数据层与认证层的地基**，
+   本地与 CI 装的是不同的编译产物。
+
+**为什么它一直没炸**：这些依赖在两个版本上行为恰好一致，且 CI 长期绿灯，
+间接提供了"代码能在 3.12 上运行"的证据。**但这是运气，不是设计。**
+
+**决策：双层约束，两处都做**
 
 | 机制 | 管什么 | 单独使用的漏洞 |
 | --- | --- | --- |
-| `.python-version` = `3.12` | uv 本地建 venv 用哪个解释器 | **不影响依赖解析**,lock 里 3.14 分支仍在 |
-| `requires-python = ">=3.12,<3.13"` | uv 解析依赖时考虑哪些版本 | 不指定具体版本,uv 仍需别处得知装哪个 |
+| `.python-version` = `3.12` | uv 本地建 venv 用哪个解释器 | **不影响依赖解析**，lock 中 3.14 分支仍在 |
+| `requires-python = ">=3.12,<3.13"` | uv 解析依赖时考虑哪些版本 | 不指定具体版本，uv 仍需别处得知装哪个 |
 
-**这与 `quantity_grams` 的处理同构**:应用层 FEFO `min()` + DB 层 CHECK 双重保障。
-关键不变量在两层固化,不依赖单点或人为约定。
+**这与 `quantity_grams` 的处理同构**：应用层 FEFO `min()` + DB 层 `CHECK >= 0` 双重保障。
+关键不变量在两层固化，不依赖单点或人为约定。
 
-**配套:CI 改为读 `.python-version`**
+**配套：CI 改为读 `.python-version`**
 
-`uv python install 3.12` → `uv python install`(不带参数,自动读文件)。
-版本号在全仓只剩一个来源,消除"改了本地忘了 CI"这一漂移成因。
-同时新增 `uv run python -V` 步骤,让实际版本在 CI 日志中可见,
-使未来的漂移显性化而非隐形。
+`uv python install 3.12` → `uv python install`（不带参数，自动读文件）。
+版本号在全仓只剩一个来源，消除"改了本地忘了 CI"这一漂移成因
 —— 同 `summary_key()` 统一生成缓存 key、`line_demand` 抽单一真相源的思路。
+同时新增 `uv run python -V` 步骤，让实际版本在 CI 日志中可见，使未来漂移显性化而非隐形。
 
 **为什么是 3.12 而非 3.13**
 
-部署阶段的首要指标是**可重现性**,不是版本新。3.12 生态最成熟,
-所有 C 扩展依赖均有预编译 wheel,`python:3.12-slim` 官方镜像稳定;
-3.13 的 free-threading 仍在铺开,部分 wheel 覆盖不完整。
+部署阶段的首要指标是**可重现性**，不是版本新。
+3.12 生态最成熟，全部 C 扩展依赖均有预编译 wheel，`python:3.12-slim` 官方镜像稳定；
+3.13 的 free-threading 仍在铺开，部分 wheel 覆盖不完整。
+用新版本换来的性能提升在本项目负载下测不出来，换来的构建失败风险却是实打实的。
 
-**验收标准(可量化,优于"测试绿了")**
+**验收标准（可量化，优于"测试绿了"）**
+
+```
+grep -c cp314 uv.lock    # 重建前 280 → 重建后应为 0
+```
+
+依赖树真正收敛到单一版本的硬证据。
+
+**改动面（四处）**：新建 `.python-version` / `pyproject.toml` 加上界 /
+删除并重建 `uv.lock` / CI 改为读文件。
+
+**备选**：留在 3.14（部分库需现场编译，`google-genai` 已报 DeprecationWarning）；
+升到 3.13（生态仍在追赶）；只建 `.python-version` 不加上界（lock 仍双分支，治标不治本）。
+
+### DEP1 — 后端平台：Fly.io
+
+- Docker 原生（本项目已容器化）、region 可选（需与 Neon 对齐）、CLI 体验好、按秒计费。
+- **备选**：Railway（更简单但免费额度收紧）、Render（冷启动更慢）、
+  自建 VPS（运维面过大，单人项目承担不起）。
+
+### DEP2 — 对象存储：本周不做，推迟 ⏸
+
+- **理由：项目当前没有任何文件上传功能**（菜谱图片在 Brief 中列出但从未实现）。
+  为不存在的功能选型是过度设计，违背既定的"演进式设计，推迟复杂度"原则。
+- **若将来做则选 Cloudflare R2**：零 egress 费（图片读多写少，egress 是主要成本）；
+  S3 兼容 API 意味着迁回 S3 只改 endpoint，供应商锁定风险低。
+- **面试点**：能说清"为什么现在不做"和"做的话怎么选"，
+  比硬塞一个用不上的集成更有说服力。
+
+### DEP3 — 数据库：Neon Free（非 Fly Postgres）
+
+- **选定 Neon Free**：$0，0.5 GB 存储 + 100 CU-hours/月，scale-to-zero。
+  本项目数据量（USDA 食材子集 + 用户数据）远低于上限。
+- **备选一 Fly Managed Postgres**：$38/月起 —— 作品集场景成本不合理。
+- **备选二 Fly 非托管 Postgres**：约 $2–7/月，但官方已标 legacy 且明确不提供支持，
+  备份 / 版本升级 / 灾备全部自理 —— 单人项目承担不起这个运维面。
+- **代价（必须处理）**：
+  1. scale-to-zero 冷启动 300–500 ms。
+  2. **pooled 连接走 PgBouncer 事务模式，不支持 prepared statements**；
+     asyncpg 默认开 statement cache，需在 `app/core/database.py` 的
+     `create_async_engine` 加 `connect_args={"statement_cache_size": 0}`，
+     否则报 `prepared statement "__asyncpg_stmt_N__" does not exist`。
+     **当前该调用无 `connect_args`（只有 `echo` 与 `pool_pre_ping`），Step 2 需修改。**
+  3. Neon region 需与 Fly app region 对齐，否则每次查询多几十毫秒，
+     `daily-summary` 这类多查询端点会被放大。
+
+### DEP4 — 前端托管：Cloudflare Pages
+
+- 免费 + 全球 CDN + push 自动构建；首屏速度直接影响招聘官第一印象。
+- **备选**：在 Fly 上起第二个 app 反代 `/api` 做同源（可彻底消灭 CORS/azp 配置），
+  但多一台机器成本 + nginx 配置；而 CORS 本项目 Week 5 已调通，不构成新增成本。
+- **必须配 SPA fallback 到 `index.html`** —— react-router 是客户端路由，
+  否则用户直接访问 `/recipes/12` 会 404。
+- **注意**：`VITE_API_BASE_URL` 是 **build-time** 注入（字面替换进 bundle），
+  非运行时读取。后端域名变更必须重新 build 重新部署，改环境变量无效。
+
+### DEP5 — Clerk：分两阶段切换，不与首次部署同时进行
+
+- **阶段一（Step 0–10）**：沿用 dev instance + 免费域名（`*.fly.dev` / `*.pages.dev`），
+  先把部署链路整体跑通。
+- **阶段二（Step 11）**：买域名 → 开 Clerk production instance → 切 issuer / key / azp。
+- **理由：一次只改一个变量**。首次部署时新变量已有 5 个
+  （镜像 / Neon 连接 / Upstash / CORS / 前端域名），
+  若同时更换认证（issuer 变、JWKS 变、key 变、用户库清空），
+  登录返回 401 时无法定位是哪一层。
+  参照 Week 5 的"假 CORS"教训 —— 表象与真因分离的问题必须靠隔离变量排查。
+- **待验证前提**：dev instance 是否允许非 localhost origin。
+  须在 Step 6 之前于 Clerk Dashboard 确认；
+  若不允许，则 Step 11 需提前至 Step 6，域名要提早购买。
+
+### DEP6 — 迁移执行：Fly `release_command` 自动 `alembic upgrade head`
+
+- 保证代码与 schema 永远同步，不会出现"代码上线了但表没建"。
+- **代价**：坏迁移会阻断整次部署；失败不会自动 downgrade。
+- **缓解**：沿用既有 Alembic 验证清单（apply 前 `grep -A8 "def upgrade"` 确认非 `pass`；
+  确认输出含 `Running upgrade X -> Y` 那行），
+  并保留 `fly ssh console` 手动跑迁移的兜底路径。
+
+### DEP7 — 后端常驻：`min_machines_running = 1`，不启用 scale-to-zero
+
+- 省下的几美元 < 招聘官点开链接白屏 8 秒、误以为项目已挂的损失。
+- **这是面向真实用户（招聘官）的决策，不是纯技术最优解** ——
+  与项目一贯的"先从真实用户视角推理"原则一致。
+
+### DEP8 — `.env.example` 补齐为部署配置清单 ✅ 2026-08-13
+
+审计发现 4 个配置项在 `app/core/config.py` 中存在但 `.env.example` 未记录：
+`CORS_ALLOWED_ORIGINS_RAW` / `GEMINI_API_KEY` / `GEMINI_MODEL` / `AI_MAX_TOKENS`。
+
+**为何是部署阻塞项而非洁癖**：`.env.example` 是"线上必须配哪些变量"的唯一清单，
+灌 `fly secrets` 时照它执行。缺项导致的两种失效**都不会在启动时报错**：
+
+- `gemini_api_key` 有默认空值 → 服务正常启动，用户点"AI 生成"时才炸
+- `cors_allowed_origins_raw` 有 localhost 默认值 → 服务正常启动，前端全部请求被浏览器拦
+
+**启动即失败远优于运行时静默失效** —— 这类"只在用户操作时暴露"的配置缺失最难排查。
+补齐时按"本地专用 / 部署需改"分组，并就地标注两条既有教训：
+`localhost` ≠ `127.0.0.1`（CORS 与 azp 两处都敏感）、模型串号必须可配置（模型会下线）。
+
+### Week 11 部署顺序（执行清单）
+
+| # | 步骤 | 完成标志 |
+| --- | --- | --- |
+| 0 | Python 3.12 收敛（DEP0）+ `.env.example` 补齐（DEP8） | `grep -c cp314 uv.lock` = 0；93 测试全绿；CI 绿 |
+| 1 | Dockerfile 多阶段构建，本地连本地 PG/Redis 跑通 | 容器内 `/health` 与 `/docs` 可访问 |
+| 2 | Neon 建库；加 `statement_cache_size=0`；从本地 `alembic upgrade head` | `\dt` 看到全部表 |
+| 3 | **灌 seed 数据到生产库**（USDA 食材） | 线上库食材表非空 |
+| 4 | Upstash 建 Redis，本地用线上 `REDIS_URL` 验证 | daily-summary 命中缓存 |
+| 5 | `fly launch` + `fly secrets set` + deploy | 公网 `/health` 返回 200 |
+| 6 | 前端 build + 部署 Pages | 页面可打开（此时 API 因 CORS 失败属正常） |
+| 7 | 回填 CORS + azp，后端重新 deploy | 登录打通 |
+| 8 | 端到端冒烟：登录→加库存→AI生成→排餐→扣库存→采购→回流→概览 | 全链路走通 |
+| 9 | CD：push main → 自动 deploy | push 后线上自动更新 |
+| 10 | Sentry + README + demo 账号 | 招聘官点开即可看 |
+| 11 | 买域名 + Clerk production instance（DEP5 阶段二） | 自定义域名 + prod key 下登录正常 |
+
+**易漏点**：第 3 步（线上空库会让反向推荐 / AI / 采购全部失效）；
+第 8 步 Gemini 免费层有速率限制，连测多次可能撞 429，需确认错误提示可读；
+第 10 步招聘官不会注册账号，必须准备 demo 账号或演示 GIF。
+
+### Week 11 待采集的简历数据
+
+- `uv.lock` 中 cp314 条目 **280 → 0**（依赖树收敛的量化证据，已采集）
+- Docker 镜像体积：**单阶段 vs 多阶段**（Step 1 必须先构建单阶段版本量一次，否则无对照组）
+- 线上 `daily-summary` 缓存命中 vs 未命中的 p50/p95 延迟
+- Neon scale-to-zero 唤醒实测耗时
+- 月总成本（"一个全栈 + AI 的生产应用，$X/月"—— 成本意识是面试加分项）
+- **优雅降级实证**：切断 Redis 后 API 仍返回 200 的线上日志（D-P3 的真实环境验证）
+- CI/CD 时长：`git push` 到线上生效的秒数
