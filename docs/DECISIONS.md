@@ -525,3 +525,139 @@
 ### D-F7 — 营养目标页 ✅ Week 10
 - 流程:PUT /users/me/body-metrics(存身体数据)→ POST /users/me/nutrition-goal/compute(算 TDEE,身体数据没填齐后端 422)。
 - **端点前缀提醒**:nutrition router prefix = `/users/me`(非 `/nutrition`);shopping = `/shopping-lists`(非 `/shopping`)。前端拼路径前务必确认后端 prefix。
+
+
+---
+
+## DEP 系列 — 部署决策(Week 11)
+
+### DEP0 — Python 版本:3.14.5 → 3.12(部署前置)
+
+- **背景**:3.14.5 是 Week 1 建项目时 uv 自动抓取的最新版,并非主动选型。
+- **决策**:降至 3.12,并在 `pyproject.toml` 锁定区间 `>=3.12,<3.13`。
+- **理由**:
+  - 部署阶段首要指标是**可重现性**,不是版本新。
+  - 3.12 生态最成熟:asyncpg / pydantic-core / cryptography 等 C 扩展依赖
+    均有预编译 wheel,无需构建时现场编译;`python:3.12-slim` 官方镜像稳定。
+  - 3.13 的 free-threading 仍在铺开,部分 C 扩展 wheel 覆盖不完整。
+  - 上界 `<3.13` 是刻意的:防止本地 / CI / Docker 三处环境解析出不同依赖树,
+    出现"本地绿 CI 红"。
+- **备选**:留在 3.14(部分库无 wheel,google-generativeai 已报 DeprecationWarning)、
+  升到 3.13(生态仍在追赶)。
+- **改动面**:`.python-version` / `pyproject.toml` / `uv.lock`(重建) /
+  GitHub Actions workflow —— 四处必须同步,漏 CI 那处会表现为"本地绿 CI 红"。
+
+### DEP1 — 后端平台:Fly.io
+
+- Docker 原生、region 可选、CLI 体验好、按秒计费。
+- 备选:Railway(更简单但免费额度收紧)、Render(冷启动更慢)、
+  自建 VPS(运维面过大,单人项目承担不起)。
+
+### DEP2 — 对象存储:本周不做,推迟 ⏸
+
+- **理由:项目当前没有任何文件上传功能**(菜谱图片在 Brief 中但从未实现)。
+  为不存在的功能选型是过度设计,违背既定的"演进式设计,推迟复杂度"原则。
+- **若将来做则选 Cloudflare R2**:零 egress 费(图片读多写少,egress 是主要成本);
+  S3 兼容 API 意味着迁回 S3 只改 endpoint,锁定风险低。
+- **面试点**:能说清"为什么现在不做"和"做的话怎么选",
+  比硬塞一个用不上的集成更有说服力。
+
+### DEP3 — 数据库:Neon Free(非 Fly Postgres)
+
+- **选定 Neon Free**:$0,0.5GB 存储 + 100 CU-hours/月,scale-to-zero。
+  本项目数据量(USDA 食材子集 + 用户数据)远低于上限。
+- **备选一 Fly Managed Postgres**:$38/月起 —— 作品集场景成本不合理。
+- **备选二 Fly 非托管 Postgres**:~$2-7/月,但官方已标 legacy 且明确不提供支持,
+  备份 / 版本升级 / 灾备全部自理 —— 单人项目承担不起这个运维面。
+- **代价(必须处理)**:
+  1. scale-to-zero 冷启动 300-500ms。
+  2. **pooled 连接走 PgBouncer 事务模式,不支持 prepared statements**;
+     asyncpg 默认开 statement cache,需设 `statement_cache_size=0`,
+     否则报 `prepared statement "__asyncpg_stmt_N__" does not exist`。
+  3. Neon region 需与 Fly app region 对齐,否则每次查询多几十毫秒,
+     daily-summary 这类多查询端点会被放大。
+
+### DEP4 — 前端托管:Cloudflare Pages
+
+- 免费 + 全球 CDN + push 自动构建;首屏速度直接影响招聘官第一印象。
+- **备选**:Fly 上起第二个 app 反代 `/api` 做同源(可彻底消灭 CORS/azp 配置),
+  但多一台机器成本 + nginx 配置;而 CORS 本项目 Week 5 已调通,不构成新增成本。
+- **必须配 SPA fallback 到 `index.html`** —— react-router 是客户端路由,
+  否则用户直接访问 `/recipes/12` 会 404。
+
+### DEP5 — Clerk:分两阶段切换,不与首次部署同时进行
+
+- **阶段一(Step 0-10)**:沿用 dev instance + 免费域名(`*.fly.dev` / `*.pages.dev`),
+  先把部署链路整体跑通。
+- **阶段二(Step 11)**:买域名 → 开 Clerk production instance → 切 issuer / key / azp。
+- **理由:一次只改一个变量**。首次部署时新变量已有 5 个
+  (镜像 / Neon 连接 / Upstash / CORS / 前端域名),
+  若同时更换认证,登录返回 401 时无法定位是哪一层。
+  参照 Week 5 的"假 CORS"教训 —— 表象与真因分离的问题必须靠隔离变量来排查。
+- **待验证前提**:dev instance 是否允许非 localhost origin。
+  须在 Step 6 之前于 Clerk Dashboard 确认;
+  若不允许,则 Step 11 需提前至 Step 6,域名要提早购买。
+
+### DEP6 — 迁移执行:Fly `release_command` 自动 `alembic upgrade head`
+
+- 保证代码与 schema 永远同步,不会出现"代码上线了但表没建"。
+- **代价**:坏迁移会阻断整次部署;失败不会自动 downgrade。
+- **缓解**:沿用既有 Alembic 验证清单(apply 前 `grep -A8 "def upgrade"` 确认非 `pass`、
+  看 `Running upgrade X -> Y` 那行),
+  并保留 `fly ssh console` 手动跑迁移的兜底路径。
+
+### DEP7 — 后端常驻:`min_machines_running = 1`,不启用 scale-to-zero
+
+- 省下的几美元 < 招聘官点开链接白屏 8 秒、误以为项目已挂的损失。
+- **这是面向真实用户(招聘官)的决策,不是纯技术最优解** ——
+  与项目一贯的"先从真实用户视角推理"原则一致。
+
+  ---
+
+## DEP 系列 — 部署决策(Week 11)
+
+### DEP0 — Python 版本收敛:双层约束锁定 3.12 ✅
+
+**审计发现(部署前环境一致性检查)**
+
+原以为的问题是"`.python-version` 锁了 3.14 需要改",实际情况不同:
+
+1. **`.python-version` 从未存在**。`pyproject.toml` 写的是 `requires-python = ">=3.12"`,
+   只有下界,uv 遂挑选系统上最新的可用版本 —— 3.14.5。
+   问题不是"锁错了",而是**根本没锁**。
+2. **CI 一直硬编码 `uv python install 3.12`**。
+   即:**本地跑 3.14.5,CI 跑 3.12,已漂移数周而未被发现**。
+3. **`uv.lock` 因上界开放而生成两套 resolution-markers**
+   (`>= '3.14'` 与 `< '3.14'`),实测含 280 条 cp314 wheel、137 条 cp312 wheel。
+   受影响的 14 个包全是 C 扩展依赖,含
+   **asyncpg / pydantic-core / sqlalchemy / cryptography** ——
+   正是数据层与认证层的地基,本地与 CI 装的是不同的编译产物。
+
+**为什么它一直没炸**:这些依赖在两个版本上行为恰好一致,且 CI 长期绿灯提供了
+"代码能在 3.12 上运行"的间接证据。但这是运气,不是设计。
+
+**决策:双层约束,两处都做**
+
+| 机制 | 管什么 | 单独使用的漏洞 |
+| --- | --- | --- |
+| `.python-version` = `3.12` | uv 本地建 venv 用哪个解释器 | **不影响依赖解析**,lock 里 3.14 分支仍在 |
+| `requires-python = ">=3.12,<3.13"` | uv 解析依赖时考虑哪些版本 | 不指定具体版本,uv 仍需别处得知装哪个 |
+
+**这与 `quantity_grams` 的处理同构**:应用层 FEFO `min()` + DB 层 CHECK 双重保障。
+关键不变量在两层固化,不依赖单点或人为约定。
+
+**配套:CI 改为读 `.python-version`**
+
+`uv python install 3.12` → `uv python install`(不带参数,自动读文件)。
+版本号在全仓只剩一个来源,消除"改了本地忘了 CI"这一漂移成因。
+同时新增 `uv run python -V` 步骤,让实际版本在 CI 日志中可见,
+使未来的漂移显性化而非隐形。
+—— 同 `summary_key()` 统一生成缓存 key、`line_demand` 抽单一真相源的思路。
+
+**为什么是 3.12 而非 3.13**
+
+部署阶段的首要指标是**可重现性**,不是版本新。3.12 生态最成熟,
+所有 C 扩展依赖均有预编译 wheel,`python:3.12-slim` 官方镜像稳定;
+3.13 的 free-threading 仍在铺开,部分 wheel 覆盖不完整。
+
+**验收标准(可量化,优于"测试绿了")**
