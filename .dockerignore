@@ -1,0 +1,31 @@
+# ---- 安全: 绝不进镜像(含密钥/历史) ----
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+
+# ---- 前端: 后端镜像不需要, 且 node_modules 巨大 ----
+frontend
+
+# ---- Python 缓存/虚拟环境(镜像内会重建) ----
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# ---- 测试/文档/CI: 运行时不需要 ----
+tests
+docs
+.github
+README.md
+LICENSE
+
+# ---- 本地开发编排文件 ----
+docker-compose*.yml
+Dockerfile*
+.dockerignore

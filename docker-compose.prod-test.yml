@@ -1,0 +1,42 @@
+# ============================================================================
+# 本地模拟生产 —— 验证 Docker 镜像能起、能连库。用完即弃, 不影响日常 dev。
+# 用法: docker compose -f docker-compose.prod-test.yml up --build
+# ============================================================================
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # 注意主机名是 postgres/redis(compose 服务名), 不是 localhost
+      DATABASE_URL: postgresql+asyncpg://mealforge:mealforge@postgres:5432/mealforge
+      REDIS_URL: redis://redis:6379/0
+      CLERK_ISSUER: https://literate-koala-34.clerk.accounts.dev
+      APP_ENV: prod-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mealforge
+      POSTGRES_PASSWORD: mealforge
+      POSTGRES_DB: mealforge
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mealforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
