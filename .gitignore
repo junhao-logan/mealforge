@@ -58,3 +58,5 @@ docker-volumes/
 *.sqlite
 *.db
 app/ingredients/seed_data/usda/
+# 临时 Neon 环境文件(含线上库密码, 迁移/种子用完即删)
+.env.neon
