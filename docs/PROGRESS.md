@@ -545,3 +545,92 @@ frontend/src/
 - **部署不影响本地开发**:本地照常 dev/改/测,push 后线上自动更新
 
 **Week 10 状态:前端 6 页全功能完成 ✅**
+
+---
+
+## Week 11 — 部署上线 🚧 进行中
+
+**目标**:把 MealForge 部署上线,产出面试可用的公网链接。
+**决策**:完整 DEP0–DEP8 + 部署顺序表见 `docs/DECISIONS.md` 的「DEP 系列」章节(单一真相源)。
+本段只记**执行进度与实操踩坑**,不重复决策理由。
+
+**11 步进度**:Step 0/1/2 ✅ 完成 | Step 3–11 ⏳ 待做
+
+### 架构全景(本地三件套 → 云上三家托管)
+
+```
+你的代码 ──打包镜像(Step1)──> 应用镜像 ──推送(Step5)──> Fly.io(后端, 公网)
+                                                          │连
+                          ┌───────────────────────────────┼───────────────┐
+                          │连                              │连             │
+                    Neon(PostgreSQL, Step2 已建库)  Upstash(Redis, Step3)  │
+                                                                          公网链接
+前端 ──build(Step6)──> Cloudflare Pages ──调用──> Fly 后端 ──> 招聘官打开即用
+```
+
+- 后端镜像 → **Fly.io**(DEP1);PostgreSQL → **Neon**(DEP3);Redis → **Upstash**(计划);前端 → **Cloudflare Pages**(DEP4)
+- 三个都选云托管而非自己在 Fly 上装:免费 + 自动备份 + 免运维
+- **概念澄清**:Neon 不是"替代 Postgres",它**就是** PostgreSQL,只是运行地点从本地容器搬到云端
+
+### Step 0 ✅ — Python 版本收敛 + 配置补齐
+
+**审计发现(与预期不符)**:原以为"`.python-version` 锁了 3.14 要改",实际是:
+①`.python-version` **根本不存在** ②CI 硬编码 `uv python install 3.12`,**本地 3.14.5 / CI 3.12 已漂移数周** ③`uv.lock` 因 `requires-python` 只有下界而生成两套分支,**280 条 cp314 wheel**(含 asyncpg/pydantic-core/sqlalchemy/cryptography)。
+
+**修复**:双层约束——新建 `.python-version=3.12` + `pyproject.toml` 加上界 `>=3.12,<3.13` + 删除重建 `uv.lock` + CI 改 `uv python install`(读文件,消除第二真相源)。
+**验收**:`grep -c cp314 uv.lock` **280 → 0**,lock 头部变 `requires-python = "==3.12.*"`。✅
+
+**副作用(踩坑记录)**:`rm uv.lock` 顺带把 **26 个依赖升到最新**(cryptography 48→50 跨两大版本、starlette 1.2→1.6、ruff 0.15→0.16)。教训:`rm uv.lock` 把"版本收敛"和"依赖升级"两个逻辑变更捆进一次改动,违反 one-logical-change。更精细做法是先 `uv lock`(尽量保留旧版)再单独升级。已做不回退,靠测试 + CI 验证。
+
+**顺带补**:`.env.example` 补齐 4 缺失项(`CORS_ALLOWED_ORIGINS_RAW`/`GEMINI_API_KEY`/`GEMINI_MODEL`/`AI_MAX_TOKENS`);新建 `frontend/.env.example`(前后端 env 分离:不同运行时/注入时机/信任边界,合并会把密钥泄进 bundle)。
+
+### Step 1 ✅ — 后端容器化(首次)
+
+**关键澄清**:Week 1–10 后端从未进容器(一直本地 `uv run uvicorn`);Step 1 是**第一次把自己的应用**打成镜像(`mealforge:multi`)。之前 compose 里的 postgres/redis 是拉的现成镜像,不是自己造的。
+
+**多阶段 Dockerfile**:builder 用 uv 装依赖 → runtime 只拷装好的 venv + 源码,不含 uv/构建工具。**体积 474MB(单阶段) → 385MB(多阶段),-19%**。
+- 降幅只有 19%(非预期的 60-80%)恰说明**底子干净**:一开始就用 `python:3.12-slim` + uv,没装多余 apt 包。话术从"大幅优化"改为"全程控制体积"。
+- 关键决策:①镜像内直接用 uv,不导出 requirements.txt(避免第二依赖源,刚吃过漂移的亏)②健康检查用 `/health`(liveness)非 `/health/ready`(readiness)—— DB 抖动不该触发容器重启(重启修不了 DB,只会重启风暴)③非 root 用户运行
+- `.dockerignore` 排除 `.env`/`.git`/`frontend` —— **排 `.env` 是安全红线(防密钥进镜像),非体积优化**
+
+**验证**:`docker-compose.prod-test.yml` 本地模拟生产(用完即弃,不动日常 compose),`/health` → `{"status":"ok"}`,`/health/ready` → `{"status":"ok","database":"ok"}`,两个 200。✅
+
+**踩坑**:`.dockerignore` 曾误存为 `.dockerignore.txt`(附件系统不允许点开头文件名),Docker 不认;`docker build` 只造镜像不运行,验证需 `docker compose up` + **另开终端** curl(前台服务占着原终端)。
+
+### Step 2 ✅ — Neon 数据库就绪
+
+**做了三件事**:
+1. **改 `app/core/database.py`**:`create_async_engine` 加 `connect_args`,**按连接目标动态决定**——检测到 Neon/pooler(主机名含 `neon.tech` 或 `pooler`)才 `statement_cache_size=0` + `ssl=True`,本地直连保持原样。
+   - **为何按需而非全局**:Neon 走 PgBouncer 事务模式,不支持 prepared statement(否则报 `prepared statement "__asyncpg_stmt_N__" does not exist`);但本地直连无 PgBouncer,prepared statement 是有益优化,全局关掉是白白损失性能。**面试点:理解"为什么关"而非抄 workaround。**
+   - SSL:asyncpg 不认 URL 里的 `?sslmode=require`(那是 psycopg 语法),须用 `connect_args` 传 `ssl=True`。
+2. **建表**:本地临时指向 Neon 跑 `alembic upgrade head`,13 个迁移一次过(`911b07ee6f47` → `d5a8c3f10e29 (head)`)。跑通即验证了 statement_cache 和 SSL 都对。
+3. **灌种子**:`seed_ingredients` 灌入 15 种 USDA 食材。
+
+**关键理解**:
+- **迁移和种子都从本地做,不在 Fly 上**——这是一次性初始化,建好长期存在,Fly 后端以后直接读。先本地手动跑通(能立刻看结果、好排查)再交给 Step 5 的 release_command 自动化。
+- **USDA 原始 CSV 永不上云**:它只是"数据加工原料"(gitignored,只在本地),加工出的 15 条成品进了 Neon 就够。
+- **Neon vs `.env.neon` 是两回事**:Neon(云端数据库)一直在、数据都在;删掉的是 `.env.neon`(本地写着密码的临时"便条"),用完即删防泄露。以后连 Neon 靠 `fly secrets`(Step 5)或临时重建便条。
+
+**安全踩坑**:①`.gitignore` 原 env 规则(`.env`/`.env.local`/`.env.*.local`)**不匹配 `.env.neon`**,会误提交生产密码——已追加 `.env.neon` 规则,`git check-ignore` 验证。②临时环境用独立 `.env.neon` + `env $(...)` 单命令加载,**不改本地 `.env` 的 DATABASE_URL**(防日常开发误连生产库)。
+
+**已改文件**:`app/core/database.py`(提交)、`.gitignore`(提交)。种子脚本的 `TODO S4` 未动(首次灌入是纯 INSERT,占位逻辑正确;S4 是重灌优化,与上线无关)。
+
+### 待采集的简历数据(现在就想好要测什么)
+
+| 数据 | 状态 |
+| --- | --- |
+| `uv.lock` cp314 条目 280 → 0 | ✅ 已采集(Step 0) |
+| Docker 镜像 474MB → 385MB (-19%) | ✅ 已采集(Step 1) |
+| 线上 daily-summary 缓存命中 vs 未命中 p50/p95 | ⏳ Step 5 后 |
+| Neon scale-to-zero 唤醒实测耗时 | ⏳ Step 5 后 |
+| 月总成本("全栈+AI 生产应用 $X/月") | ⏳ 部署完 |
+| 优雅降级实证(切 Redis 后 API 仍 200 的线上日志, D-P3) | ⏳ Step 4/5 后 |
+| CI/CD 时长(push 到线上生效秒数) | ⏳ Step 9 后 |
+
+### 下一步:Step 3 — Upstash Redis
+
+- 去 upstash.com 注册(GitHub 登录),建 Redis 数据库,region 对齐 us-east
+- 拿 `rediss://`(两个 s,TLS)连接串,本地验证缓存命中
+- 比 Neon 简单;之后 Step 5 Fly 部署是本周最硬一步(坑最多,留足额度)
+
+**待验证前提(DEP5,Step 6 前必查)**:Clerk dev instance 能否加非 localhost origin —— 决定"先部署再切域名"还是"必须先买域名"。此项已问多轮仍未确认。
