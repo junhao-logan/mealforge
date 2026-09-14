@@ -1,41 +1,66 @@
 # MealForge
-![CI](https://github.com/junhao-logan/mealforge/actions/workflows/ci.yml/badge.svg)
-AI-powered meal planning platform with inventory-aware recipe recommendations.
 
-Built end-to-end as a learning project to explore modern full-stack development with Python, React, and AI integration.
+Inventory-aware meal planning with AI recipe generation. Set nutrition goals, plan weekly meals with auto-calculated macros, track ingredient inventory, and generate shopping lists from the gap between what a plan needs and what's on hand.
 
-## Status
+**Live:** https://mealforge.pages.dev · **API docs:** https://mealforge.fly.dev/docs
 
-🚧 In active development (Week 4 of 12 — Phase 1 MVP backend complete)
-## Vision
+## Overview
 
-Most fitness apps stop at calorie tracking. MealForge goes further:
+MealForge connects four things most trackers keep separate: nutrition goals, meal plans, ingredient inventory, and shopping. A recipe added to a plan draws down inventory on a first-expiring-first-out basis; the shopping list is computed from remaining demand, not entered by hand; the AI generator proposes recipes from what's already in the fridge.
 
-- Set nutrition goals based on TDEE
-- Plan weekly meals with auto-calculated macros
-- Track ingredient inventory in real time
-- Generate smart shopping lists from your meal plan
-- Use AI to suggest recipes based on what's already in your fridge
+## Tech stack
 
-## Tech Stack
+**Backend** — Python 3.12, FastAPI, SQLAlchemy 2.0 (async), PostgreSQL, Redis, Alembic
+**Frontend** — React 19, Vite, Tailwind CSS, shadcn/ui, React Router
+**Auth** — Clerk (JWT verification via JWKS, RS256)
+**AI** — Google Gemini with structured output
+**Infrastructure** — Docker (multi-stage), Fly.io (backend), Neon (Postgres), Upstash (Redis), Cloudflare Pages (frontend), GitHub Actions (CI/CD)
 
-**Backend** — Python, FastAPI, SQLAlchemy 2.0, PostgreSQL, Redis, Celery
-**Frontend** — React, TypeScript, Tailwind CSS, shadcn/ui
-**AI** — Anthropic Claude API with structured outputs
-**Infrastructure** — Docker, GitHub Actions, deployed on Fly.io
+## Architecture
 
-## Roadmap
+The frontend is a static SPA on Cloudflare Pages' CDN. It calls the FastAPI backend running on Fly.io, which connects to managed Postgres (Neon) and Redis (Upstash). Authentication is handled by Clerk: the frontend obtains a JWT, the backend verifies it against Clerk's JWKS.
 
-- [x] Week 1: Project setup, ER diagram, FastAPI skeleton
-- [x] Week 2-4: Core MVP (recipes, ingredients, meal planning)
-- [ ] Week 5-6: Inventory tracking and shopping lists
-- [ ] Week 7-8: AI recipe and meal plan generation
-- [ ] Week 9-10: Testing, performance, UI polish
-- [ ] Week 11-12: Production deployment and user feedback
+Redis caches computed daily nutrition summaries and is treated as a disposable accelerator — if it is unavailable, requests fall through to Postgres and still succeed. Database schema is managed by Alembic, applied automatically on each deploy via Fly's release command.
 
-## Development
+CI/CD runs on GitHub Actions: pushing to `main` runs the full test suite against an ephemeral Postgres, and only a passing suite triggers deployment to Fly.io.
 
-Setup instructions will be added once the backend skeleton is in place.
+## Local development
+
+Requires Docker, [uv](https://github.com/astral-sh/uv), and Node.js.
+
+Start Postgres and Redis:
+
+```bash
+docker compose up -d postgres redis
+```
+
+Backend (from repo root):
+
+```bash
+cp .env.example .env          # fill in CLERK_ISSUER, GEMINI_API_KEY, etc.
+uv sync --all-extras --dev
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload
+```
+
+API is then at http://127.0.0.1:8000 (docs at `/docs`).
+
+Frontend:
+
+```bash
+cd frontend
+cp .env.example .env.local    # fill in VITE_CLERK_PUBLISHABLE_KEY, VITE_API_URL
+npm install
+npm run dev
+```
+
+## Testing
+
+```bash
+uv run pytest
+```
+
+93 tests, 86% coverage. The CI gate enforces a minimum coverage threshold and must pass before any deploy.
 
 ## License
 
