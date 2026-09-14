@@ -1,0 +1,45 @@
+# ============================================================================
+# fly.toml — MealForge 后端部署配置
+#
+# 用法: 先 `fly launch --no-deploy` 生成基础版, 再用本文件覆盖, 只改 app 名一处。
+# ============================================================================
+
+# ⬇️⬇️⬇️ 唯一需要你改的地方: 换成 fly launch 给你分配/你起的 app 名 ⬇️⬇️⬇️
+app = "mealforge"
+# ⬆️⬆️⬆️ 比如 "mealforge-logan"。必须全局唯一, 会成为 https://<app>.fly.dev
+
+primary_region = "iad"   # Ashburn, 美东 — 对齐 Neon(us-east-2)/ Upstash(us-east-1)
+
+[build]
+  # 用仓库根的 Dockerfile(多阶段, Step 1 已验证)
+  dockerfile = "Dockerfile"
+
+[env]
+  # 非敏感环境变量放这里(会进 git)。敏感的走 `fly secrets set`(见操作流程)。
+  APP_ENV = "production"
+  # 注意: CORS 暂留空/默认, 前端部署后(Step 7)再用 secrets 或这里回填线上域名。
+
+[http_service]
+  internal_port = 8000            # 容器内 uvicorn 监听端口(Dockerfile EXPOSE 8000)
+  force_https = true              # http 自动跳 https
+  auto_stop_machines = "suspend"  # 无流量时挂起(不是完全停, 唤醒更快)
+  auto_start_machines = true      # 有请求自动唤醒
+  min_machines_running = 1        # DEP7: 至少 1 台常驻, 避免招聘官遇到冷启动白屏
+
+  [[http_service.checks]]
+    # liveness: 打 /health(不碰 DB)。不用 /health/ready —— DB 冷启动会误判机器挂掉 -> 重启风暴
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"          # 容器刚起给 10s 缓冲再开始检查
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"          # 最小规格, 作品集足够
+  memory = "512mb"                # FastAPI + asyncpg 足够; 不够可升 1gb
+
+# ── 部署时自动迁移(DEP6) ──
+# 每次 deploy, Fly 先在一台临时机器上跑这条命令, 成功了才把新版本放上线。
+# 迁移失败 -> 整次部署中止, 旧版本继续跑(不会出现"代码上线但表没建")。
+[deploy]
+  release_command = "alembic upgrade head"

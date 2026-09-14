@@ -1,0 +1,55 @@
+name: Deploy
+
+# 只在 push 到 main 时触发(PR 不部署, 只有合进 main 才上线)
+on:
+  push:
+    branches: [main]
+
+jobs:
+  # ---- Job 1: 测试门禁 ----
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mealforge
+          POSTGRES_PASSWORD: mealforge
+          POSTGRES_DB: mealforge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mealforge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://mealforge:mealforge@localhost:5432/mealforge_test
+      DATABASE_URL: postgresql+asyncpg://mealforge:mealforge@localhost:5432/mealforge_test
+      CLERK_ISSUER: https://ci.placeholder.test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
+      - name: Run tests
+        run: uv run pytest tests/ --cov --cov-fail-under=75
+
+  # ---- Job 2: 部署(仅当 test 通过) ----
+  deploy:
+    needs: test          # 关键: 依赖 test job, 测试红了这里不跑
+    runs-on: ubuntu-latest
+    concurrency:         # 防止两次 push 同时部署互相踩踏
+      group: deploy-production
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy to Fly
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
