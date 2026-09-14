@@ -457,8 +457,8 @@
 | 11 | `create_async_engine` 无 `connect_args`，接 Neon 需加 `statement_cache_size=0` | DEP3 | ⏳ Week 11 Step 2 |
 | 12 | 全仓 lint 欠账（CI 仅覆盖 shopping/ingredients/recipes/ai/meal_plans/tests） | Week 7+ | ⏳ 低 |
 | 13 | 缓存失效第二版：variant 营养变更 → 反查受影响天精准失效 | D-P2 | ⏳ 低（TTL 兜底中） |
-| 14 | README 严重过期：写"Week 4 of 12"，Roadmap 5-12 周全未勾选；技术栈误列 TypeScript（实为纯 JS，见 D-F1）、Celery（从未引入）、Anthropic Claude API（实为 Google Gemini） | Week 1 | ⏳ Week 11 Step 10（招聘官第一入口，优先级高） |
-| 15 | `VITE_API_URL` 缺失时静默退回 `http://127.0.0.1:8000`，生产构建应直接失败 | DEP4 | ⏳ Week 11 Step 6 |
+| 14 | ~~README 严重过期：写"Week 4 of 12"，技术栈误列 TypeScript / Celery / Claude API~~ | Week 1 | ✅ Week 11 Step 10 重写（成品定位，真实技术栈，删坏 badge） |
+| 15 | `VITE_API_URL` 缺失时静默退回 `http://127.0.0.1:8000`，生产构建应直接失败 | DEP4 | ⏳ 低（Step 6 已在 Cloudflare 配好该变量规避；代码层加固待后续迭代） |
 | 16 | ~~`frontend/` 无 `.env.example`（构建期变量无清单）~~ | DEP8 | ✅ 2026-08-14 |
 | 17 | `frontend/index.html` 的 `<title>` 仍为脚手架默认值 `frontend` | Week 10 | ⏳ Week 11 Step 6（一行） |
 
@@ -781,3 +781,46 @@ Step 6 在 Cloudflare Pages 配置构建环境变量时需要这份清单，故�
 - 月总成本（"一个全栈 + AI 的生产应用，$X/月"—— 成本意识是面试加分项）
 - **优雅降级实证**：切断 Redis 后 API 仍返回 200 的线上日志（D-P3 的真实环境验证）
 - CI/CD 时长：`git push` 到线上生效的秒数
+
+### DEP9 — CI/CD：测试门禁后自动部署 ✅ 2026-08-23（Step 9）
+
+**决策**：`.github/workflows/fly-deploy.yml` 单一 workflow，push `main` →
+先跑全套 93 测试（against ephemeral Postgres service）→ **通过才部署 Fly**。
+
+- **测试门禁**：`deploy` job 声明 `needs: test`，测试红则部署不执行。
+  这是"质量门禁"——坏代码进不了生产。方案 A（部署依赖测试）优于方案 B（并行互不干扰），
+  代价是部署慢几分钟，作品集场景完全值得，且本身是面试亮点。
+- **`concurrency: cancel-in-progress`**：连续两次 push 时取消旧部署，只跑最新，防版本踩踏。
+- **`flyctl deploy --remote-only`**：在 Fly 侧构建镜像，不占 GitHub runner，行为对齐本地 `fly deploy`。
+- **`FLY_API_TOKEN`** 存 GitHub repo Secrets（`fly tokens create deploy`），不落代码 ——
+  同 DEP8「密钥只走 secrets」红线。
+- **删除冗余 `ci.yml`**：测试逻辑并入 deploy workflow，避免一次 push 跑两遍测试、两个真相源。
+- **前端 CD 已在 Step 6 完成**：Cloudflare Pages 连 GitHub，push 自动 build+部署。
+  故 DEP9 只补后端这一半，前后端 CD 至此都自动化。
+
+**踩坑（顺带发现）**：本次 commit 才把 `fly.toml` 加进 git —— 此前它只在本地，
+意味着此前的自动部署读不到精心配的 `fly.toml`（`min_machines_running` / 健康检查 / release_command），
+用的是 Fly 侧缓存的旧配置。**教训：部署配置文件必须进版本控制**，否则 CD 与本地配置漂移。
+
+---
+
+## Week 11 部署收尾（2026-08-23）
+
+**全部完成**：后端 Fly（https://mealforge.fly.dev）+ 前端 Cloudflare Pages
+（https://mealforge.pages.dev）+ Neon（Postgres）+ Upstash（Redis）+ Clerk（认证）+
+GitHub Actions（CI/CD 门禁）。全链路生产可用，冒烟全通。
+
+**执行顺序与踩坑详见 `docs/PROGRESS.md` 的 Week 11 段**（DECISIONS 记决策，PROGRESS 记执行）。
+
+**关键实操教训汇总**（决策层）：
+- **Neon secrets 格式**：DATABASE_URL 去 `?sslmode=require&channel_binding=require` + 加 `postgresql+asyncpg://`
+  前缀（asyncpg 不认这些参数，channel_binding 尤其会直接报错）；SSL 由 `database.py` 的 `ssl=True` 处理（见 DEP3）。
+- **Clerk azp 化解**：auth 代码「`CLERK_AUTHORIZED_PARTIES_RAW` 留空则跳过 azp」，Fly 不设它 = 跳过，
+  首部署少一个变量。那个"dev instance 能否加非 localhost origin"的悬置问题就此不需要答案（不走 azp）；
+  实测 Clerk dev instance 对 `*.pages.dev` 宽松，登录直接通（DEP5 阶段一验证）。
+- **CORS 只放正式域名**：`fly secrets set CORS_ALLOWED_ORIGINS_RAW="https://mealforge.pages.dev"`，
+  不放 Cloudflare 每次部署生成的预览 hash 域名（会被拦）；https + 无尾斜杠。
+- **SPA fallback**：`frontend/public/_redirects` = `/* /index.html 200`，否则直访 `/recipes/12` 会 404（DEP4 已预警）。
+
+**暂缓项**：DEP5 阶段二（自定义域名 + Clerk production instance）非必需，dev + pages.dev 已可演示；
+demo 账号等软件迭代稳定后再做。
