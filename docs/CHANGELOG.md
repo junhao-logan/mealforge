@@ -473,6 +473,31 @@
 
 **收尾**：删前端脚手架、清测试数据、决策集中化、8 债清 4 defer 4
 
+### Chat 13 — Week 4 收尾：Clerk 前端骨架里程碑（认证端到端打通）
+
+**日期**：2026-06-19（Week 4 完成后插入，约 2–3 小时）
+**任务**：一个极简 React 页面（Vite + Clerk SDK，无 UI 美化），一次性清掉积压的
+"写了但从未用真 token 端到端测过"的认证端点。原独立文档 `FRONTEND_MILESTONE.md`
+的完成归档（该文件已并入此处删除）。
+
+**背景**：dev 阶段 Clerk 无前端时拿不到真 session JWT（Account Portal 未激活、
+Dashboard 不导出 token），导致 5 个带认证端点代码写完但从未端到端验证：
+`GET /users/me`、`PUT /users/me/body-metrics`、`POST /users/me/nutrition-goal/compute`、
+`PUT /users/me/nutrition-goal`、`GET /users/me/nutrition-goal`。
+
+**验证清单（全部达成）**：
+- 真 JWT → JWKS 验签 → JIT 写库：首次带真 token 调 `/users/me` 返回 200，
+  claim 透传 email，users 表新增影子行
+- `CLERK_ISSUER` 核对：确认用 `...clerk.accounts.dev`（非 Account Portal 的
+  `...accounts.dev` 无 `.clerk`，是不同域）
+- 营养目标全链路真测：body-metrics → compute → override → get 走真 HTTP 打通
+  （此前仅用绕认证脚本验证过存库逻辑）
+
+**遗留简历素材（待补测）**：networkless 验签延迟数据点 —— JWKS 缓存命中 vs
+打 Clerk API 的延迟对比（值得在有时间时实测记录）。
+
+**说明**：Week 4 定义的这些任务在 Week 10 前端全功能开发时已全部覆盖；此条为历史里程碑归档。
+
 ### Chat 14 — Week 6：智能采购清单（缺口 / 生成 / 回流 / CI）
 
 **日期**：2026-07-28

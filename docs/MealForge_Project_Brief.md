@@ -104,7 +104,7 @@
 |---|---|
 | **AI 菜谱生成** | LLM + structured output（JSON schema），输入需求生成完整菜谱并存库 |
 | **AI 周计划生成** | 给定营养目标 + 偏好 + 库存，LLM 生成一周菜单 |
-| **图片识别食材** | 多模态 API（GPT-4 Vision / Claude），拍冰箱 → 识别 → 入库存 |
+| **图片识别食材** | 多模态 LLM，拍冰箱 → 识别 → 入库存（未实现） |
 | **自然语言查询** | "这周蛋白质够吗"、"剩下的菠菜能做啥"，AI 直接答 |
 | **小票解析** | 拍超市小票 → OCR + LLM 结构化 → 自动入库存 |
 
@@ -117,27 +117,31 @@
 ### 4.1 选型与理由
 
 ```
-后端:    FastAPI + SQLAlchemy 2.0 + Alembic
-数据库:  PostgreSQL（主）+ Redis（缓存 + Celery broker）
-AI:      Anthropic Claude API（主）+ OpenAI API（备选）
-前端:    React + TypeScript + Tailwind CSS + shadcn/ui
-状态管理: TanStack Query + Zustand
-认证:    Clerk 或 Supabase Auth
-异步任务: Celery
-部署:    Railway / Fly.io
-容器化:  Docker + Docker Compose
-CI/CD:   GitHub Actions
-监控:    Sentry（错误）+ Logfire / Posthog（产品分析）
-测试:    pytest + pytest-asyncio + Playwright（E2E）
+后端:    FastAPI + SQLAlchemy 2.0（async）+ Alembic + uv
+数据库:  PostgreSQL（Neon 托管）+ Redis（Upstash 托管，缓存）
+AI:      Google Gemini（免费层）— adapter 层可切换供应商
+前端:    React + JavaScript + Tailwind CSS + shadcn/ui + Vite
+状态管理: React hooks（自封装 useApi 等）
+认证:    Clerk（networkless JWT / JWKS 验签）
+部署:    Fly.io（后端）+ Cloudflare Pages（前端）
+容器化:  Docker（多阶段）+ Docker Compose（本地）
+CI/CD:   GitHub Actions（测试门禁后自动部署 Fly）
+测试:    pytest + pytest-asyncio + fakeredis（93 测试 / 86% 覆盖）
 ```
+
+> 与规划期的差异（均有决策记录，见 `DECISIONS.md`）：
+> - **未用 Celery**：无异步任务需求，AI 单次同步调用即可（原设想的异步生成不必要）
+> - **AI 改 Gemini**（原设想 Claude/OpenAI）：成本考量，adapter 层保证可切换 — D-AI3
+> - **前端纯 JS 非 TS** — D-F1；**未用 TanStack Query / Zustand**：hooks 已够
+> - **未接入 Sentry / Posthog / Playwright**：规划中，尚未落地
 
 ### 4.2 为什么这样选
 
 - **FastAPI**：异步性能、类型友好、自动 OpenAPI 文档、海外流行度高
 - **PostgreSQL**：海外主流，比 MySQL 更受欢迎，支持 JSONB 适合存灵活字段
 - **shadcn/ui + Tailwind**：让 UI 看起来专业，避免"作业感"
-- **Railway / Fly.io**：比 AWS 简单，免费额度够 demo，部署快
-- **Claude API**：structured output 强、长 context、价格友好
+- **Fly.io / Cloudflare / Neon / Upstash**：比 AWS 简单，免费额度够 demo，部署快
+- **Google Gemini**：免费层（Flash-Lite 1000 次/天）够 MVP；structured output（function calling）强；adapter 层隔离，换供应商只改一个文件（D-AI3）
 
 ---
 
@@ -150,7 +154,7 @@ CI/CD:   GitHub Actions
 | **数据库设计** | 菜谱-食材多对多 + 份量、营养聚合计算、库存事务一致性 |
 | **缓存策略** | Redis 缓存营养计算、热门菜谱、AI 生成结果 |
 | **AI 集成工程化** | Structured output、prompt 版本管理、token 成本控制、失败重试 |
-| **后台任务** | Celery 异步生成周计划、定时临期提醒、批量营养计算 |
+| **AI 工程化** | 供应商 adapter 可切换（Claude→Gemini 零业务改动）、grounding 防幻觉双层校验 |
 | **API 设计** | RESTful、分页、过滤、错误处理、限流（slowapi） |
 | **测试** | pytest 单元 + 集成测试，覆盖率 >80% |
 | **性能优化** | N+1 查询识别与优化、批量计算、查询计划分析 |
@@ -218,9 +222,9 @@ CI/CD:   GitHub Actions
 - 导出功能
 
 **Week 7 — AI 菜谱生成**
-- Claude API 集成
-- Structured output（JSON schema）
-- Prompt 设计、错误处理、成本追踪
+- Gemini 集成（adapter 层，原设想 Claude，见 D-AI3）
+- Structured output（function calling）
+- Prompt 设计、grounding 防幻觉、失败也记日志
 
 **Week 8 — AI 周计划 + 反向推荐**
 - 一键生成一周菜单
@@ -240,10 +244,9 @@ CI/CD:   GitHub Actions
 - Loading / 错误 / 空状态
 
 **Week 11 — 部署上线**
-- 部署 Railway / Fly.io
-- 自定义域名 + HTTPS
-- Sentry 监控
-- 写 3-5 篇技术博客
+- 部署 Fly.io（后端）+ Cloudflare Pages（前端）+ Neon + Upstash
+- HTTPS + 健康检查 + CI/CD 测试门禁
+- 自定义域名 / Sentry：暂缓（非必需，见 DEP5）
 
 **Week 12 — 推广与迭代**
 - 发 Reddit、小红书、Twitter
@@ -287,20 +290,16 @@ CI/CD:   GitHub Actions
 
 ### 9.3 当前进度追踪
 
-> 用户进入新 chat 后，请先询问当前处于哪一周、上次做到哪里。
+> **状态：Week 1-11 全部完成，已部署上线。** 详细执行记录见 `PROGRESS.md`。
+> 进入新 chat 时先读 `PROGRESS.md` 了解最近进度，不必再逐周询问。
 
-- [ ] Week 1: 设计与搭建
-- [ ] Week 2: 菜谱与食材
-- [ ] Week 3: 营养目标
-- [ ] Week 4: 餐食规划 v1
-- [ ] Week 5: 库存管理
-- [ ] Week 6: 智能采购清单
-- [ ] Week 7: AI 菜谱生成
-- [ ] Week 8: AI 周计划 + 反向推荐
-- [ ] Week 9: 测试与性能
-- [ ] Week 10: 前端打磨
-- [ ] Week 11: 部署上线
-- [ ] Week 12: 推广与迭代
+- [x] Week 1-4: 设计搭建 / 菜谱食材 / 营养目标 / 餐食规划 v1
+- [x] Week 5-8: 库存管理 / 智能采购 / AI 菜谱生成 / AI 周计划 + 反向推荐
+- [x] Week 9-10: 测试与性能（93 测试 86% 覆盖）/ 前端 6 页全功能
+- [x] Week 11: 部署上线（Fly + Cloudflare + Neon + Upstash + CI/CD）
+- [ ] Week 12（进行中）: 软件迭代打磨 / demo 账号 / 推广（未开始）
+
+> 线上：前端 https://mealforge.pages.dev · 后端 https://mealforge.fly.dev/docs
 
 ### 9.4 简历素材积累清单
 
