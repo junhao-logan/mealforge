@@ -1,8 +1,8 @@
 // src/components/inventory/AddInventoryDialog.jsx
 // 三步式加库存:
-//   视图1 选食材(搜索公共库 + 我的食材 + 搜不到可创建)
-//   视图2 创建食物(选单位 + 每单位营养, A2)—— 仅搜不到时进入
-//   视图3 填详情(数量 + 单位[按食材 allowed_units] + 过期日 + 储存区域)→ POST /inventory
+//   视图1 选食材(tab: 全部食物 / 我的食物; 排序: 最近添加 / 字母; 搜不到可创建)
+//   视图2 创建食物(选单位 + 每单位营养, A2)
+//   视图3 填详情(数量 + 单位[按 allowed_units] + 过期日 + 储存区域)→ POST /inventory
 import { Plus, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
@@ -21,11 +21,18 @@ const ZONES = [
     { value: 'freezer', label: '冷冻' },
 ]
 
+// 数字去掉多余小数(220.0 → 220, 1.00 → 1)
+function fmtNum(v) {
+    if (v === null || v === undefined) return ''
+    const n = Number(v)
+    return Number.isInteger(n) ? String(n) : String(n)
+}
+
 export function AddInventoryDialog({ onAdded }) {
     const [open, setOpen] = useState(false)
     const [step, setStep] = useState('select')     // 'select' | 'create' | 'detail'
-    const [chosen, setChosen] = useState(null)      // 选中的食材(含 allowed_units)
-    const [pendingName, setPendingName] = useState('')  // 待创建食材名
+    const [chosen, setChosen] = useState(null)
+    const [pendingName, setPendingName] = useState('')
 
     function close() {
         setOpen(false)
@@ -76,9 +83,11 @@ export function AddInventoryDialog({ onAdded }) {
     )
 }
 
-// ── 视图1: 选食材(搜索 + 分组 + 创建) ──
+// ── 视图1: 选食材(tab + 排序 + 搜索 + 创建) ──
 function SelectIngredientView({ onPick, onCreateNew }) {
     const { call } = useApi()
+    const [tab, setTab] = useState('all')          // 'all'(全部食物) | 'mine'(我的食物)
+    const [sort, setSort] = useState('recent')     // 'recent'(最近添加) | 'name'(字母)
     const [query, setQuery] = useState('')
     const debounced = useDebounce(query, 300)
     const [results, setResults] = useState([])
@@ -89,7 +98,9 @@ function SelectIngredientView({ onPick, onCreateNew }) {
         async function search() {
             setLoading(true)
             try {
-                const params = debounced ? { name: debounced, limit: 50 } : { limit: 50 }
+                const params = { limit: 50, sort }
+                if (tab === 'mine') params.scope = 'mine'
+                if (debounced) params.name = debounced
                 const data = await call(api.get, '/ingredients', { params })
                 if (alive) setResults(data || [])
             } catch {
@@ -100,14 +111,19 @@ function SelectIngredientView({ onPick, onCreateNew }) {
         }
         search()
         return () => { alive = false }
-    }, [debounced, call])
+    }, [debounced, sort, tab, call])
 
-    const mine = results.filter((r) => r.visibility === 'private')
-    const global = results.filter((r) => r.visibility === 'global')
     const noResult = !loading && results.length === 0 && debounced
 
     return (
         <div className="space-y-3">
+            {/* tab */}
+            <div className="flex gap-1 border-b border-slate-200">
+                <TabBtn active={tab === 'all'} onClick={() => setTab('all')}>全部食物</TabBtn>
+                <TabBtn active={tab === 'mine'} onClick={() => setTab('mine')}>我的食物</TabBtn>
+            </div>
+
+            {/* 搜索 + 排序 */}
             <div className="relative">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
@@ -118,58 +134,94 @@ function SelectIngredientView({ onPick, onCreateNew }) {
                     onChange={(e) => setQuery(e.target.value)}
                 />
             </div>
+            <div className="flex items-center gap-2 text-xs">
+                <span className="text-slate-400">排序</span>
+                <SortBtn active={sort === 'recent'} onClick={() => setSort('recent')}>最近添加</SortBtn>
+                <SortBtn active={sort === 'name'} onClick={() => setSort('name')}>字母</SortBtn>
+            </div>
 
-            <div className="max-h-72 space-y-3 overflow-y-auto">
-                {loading && <p className="py-4 text-center text-sm text-slate-400">搜索中…</p>}
+            {/* 常驻: 创建新食物(始终在最上, 不必先搜不到) */}
+            <button
+                className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                onClick={() => onCreateNew(query.trim())}
+            >
+                <Plus className="h-4 w-4" /> 创建新食物
+            </button>
 
-                {mine.length > 0 && (
-                    <IngredientGroup title="我的食材" items={mine} onPick={onPick} />
-                )}
-                {global.length > 0 && (
-                    <IngredientGroup title="公共库" items={global} onPick={onPick} />
-                )}
+            {/* 结果列表 */}
+            <div className="max-h-72 space-y-1 overflow-y-auto">
+                {loading && <p className="py-4 text-center text-sm text-slate-400">加载中…</p>}
+
+                {!loading && results.map((ing) => (
+                    <button
+                        key={ing.id}
+                        className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left hover:bg-slate-100"
+                        onClick={() => onPick(ing)}
+                    >
+                        <div>
+                            <div className="flex items-center gap-1.5 text-sm text-slate-800">
+                                {ing.name}
+                                {ing.visibility === 'private' && (
+                                    <span className="text-xs text-slate-400">私人</span>
+                                )}
+                            </div>
+                            {ing.per_100g_calories !== null && ing.per_100g_calories !== undefined && (
+                                <div className="mt-0.5 text-xs text-slate-400">
+                                    {fmtNum(ing.per_100g_calories)} 千卡 / {fmtNum(ing.nutrition_basis_amount)} {unitLabel(ing.nutrition_basis_unit)}
+                                </div>
+                            )}
+                        </div>
+                        <Plus className="h-4 w-4 shrink-0 text-slate-400" />
+                    </button>
+                ))}
 
                 {noResult && (
-                    <button
-                        className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-3 text-sm text-slate-600 hover:bg-slate-50"
-                        onClick={() => onCreateNew(debounced)}
-                    >
-                        <Plus className="h-4 w-4" />
-                        创建 "{debounced}"
-                    </button>
+                    <p className="py-4 text-center text-sm text-slate-400">
+                        没搜到 "{debounced}",可点上方"创建新食物"
+                    </p>
                 )}
 
                 {!loading && results.length === 0 && !debounced && (
-                    <p className="py-4 text-center text-sm text-slate-400">输入名称搜索食材</p>
+                    <p className="py-6 text-center text-sm text-slate-400">
+                        {tab === 'mine' ? '还没有自己创建的食材' : '暂无食材'}
+                    </p>
                 )}
             </div>
         </div>
     )
 }
 
-function IngredientGroup({ title, items, onPick }) {
+function TabBtn({ active, onClick, children }) {
     return (
-        <div>
-            <p className="mb-1 px-1 text-xs font-medium text-slate-400">{title}</p>
-            <div className="space-y-1">
-                {items.map((ing) => (
-                    <button
-                        key={ing.id}
-                        className="w-full rounded-md px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-100"
-                        onClick={() => onPick(ing)}
-                    >
-                        {ing.name}
-                    </button>
-                ))}
-            </div>
-        </div>
+        <button
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${active
+                ? 'border-slate-900 text-slate-900'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+            onClick={onClick}
+        >
+            {children}
+        </button>
+    )
+}
+
+function SortBtn({ active, onClick, children }) {
+    return (
+        <button
+            className={`rounded-full px-2.5 py-1 ${active
+                ? 'bg-slate-900 text-white'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+            onClick={onClick}
+        >
+            {children}
+        </button>
     )
 }
 
 // ── 视图3: 填详情 ──
 function FillDetailView({ ingredient, onBack, onDone }) {
     const { call } = useApi()
-    // 单位选项来自后端 allowed_units(质量食材含克; 单位本位只有自己)
     const units = (ingredient.allowed_units && ingredient.allowed_units.length > 0)
         ? ingredient.allowed_units
         : ['g']

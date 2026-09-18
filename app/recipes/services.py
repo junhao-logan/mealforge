@@ -31,7 +31,10 @@ def resolve_quantity(
         return input_amount * ingredient.grams_per_unit
     raise HTTPException(
         status_code=422,
-        detail=f"食材 '{ingredient.name}' 只支持单位 {ingredient.allowed_units}, 收到 '{input_unit}'",
+        detail=(
+            f"食材 '{ingredient.name}' 只支持单位 {ingredient.allowed_units}, "
+            f"收到 '{input_unit}'"
+        ),
     )
 
 
