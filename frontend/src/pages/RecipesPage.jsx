@@ -2,6 +2,7 @@
 import { Check, Minus, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
+import { CreateRecipeDialog } from '@/components/recipes/CreateRecipeDialog'
 import { GenerateRecipeDialog } from '@/components/recipes/GenerateRecipeDialog'
 import { Link } from 'react-router'
 
@@ -26,7 +27,10 @@ export function RecipesPage() {
         <div>
             <div className="mb-6 flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-slate-900">菜谱</h1>
-                <GenerateRecipeDialog onGenerated={handleGenerated} />
+                <div className="flex items-center gap-2">
+                    <CreateRecipeDialog onCreated={handleGenerated} />
+                    <GenerateRecipeDialog onGenerated={handleGenerated} />
+                </div>
             </div>
 
             <div className="mb-4 flex gap-1 border-b border-slate-200">
@@ -47,8 +51,8 @@ function TabButton({ active, onClick, children }) {
     return (
         <button
             className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${active
-                    ? 'border-slate-900 text-slate-900'
-                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                ? 'border-slate-900 text-slate-900'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
                 }`}
             onClick={onClick}
         >
@@ -172,7 +176,7 @@ function MyRecipes({ refreshKey }) {
 
     if (loading) return <State text="加载中…" />
     if (error) return <State text={`出错了: ${error}`} />
-    if (recipes.length === 0) return <State text="还没有菜谱,点右上角 AI 生成一道试试" />
+    if (recipes.length === 0) return <State text="还没有菜谱,点右上角手动创建或 AI 生成一道" />
 
     return (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
