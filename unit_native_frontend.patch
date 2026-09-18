@@ -1,0 +1,673 @@
+diff --git a/frontend/src/components/ingredients/CreateIngredientForm.jsx b/frontend/src/components/ingredients/CreateIngredientForm.jsx
+new file mode 100644
+index 0000000..692bd43
+--- /dev/null
++++ b/frontend/src/components/ingredients/CreateIngredientForm.jsx
+@@ -0,0 +1,132 @@
++// src/components/ingredients/CreateIngredientForm.jsx
++// 创建食物(A2): 选单位 + 填"每 N 单位"的营养 → POST /ingredients。
++// 作为视图嵌进现有弹窗(加库存 / 手动创建菜谱), 不是独立 Dialog(避免嵌套弹窗)。
++import { ArrowLeft } from 'lucide-react'
++import { useState } from 'react'
++
++import { useApi } from '@/hooks/useApi'
++import { api } from '@/lib/api'
++import { FOOD_UNITS, defaultBasisFor, unitLabel } from '@/lib/units'
++
++export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) {
++    const { call } = useApi()
++    const [name, setName] = useState(initialName)
++    const [unit, setUnit] = useState('g')
++    const [basis, setBasis] = useState(String(defaultBasisFor('g')))
++    const [cal, setCal] = useState('')
++    const [protein, setProtein] = useState('')
++    const [carbs, setCarbs] = useState('')
++    const [fat, setFat] = useState('')
++    const [submitting, setSubmitting] = useState(false)
++    const [error, setError] = useState(null)
++
++    function changeUnit(u) {
++        setUnit(u)
++        setBasis(String(defaultBasisFor(u)))   // 换单位时重置基准量默认值
++    }
++
++    async function submit() {
++        if (!name.trim()) { setError('请填写名称'); return }
++        if (!basis || Number(basis) <= 0) { setError('基准量要大于 0'); return }
++        try {
++            setSubmitting(true)
++            setError(null)
++            const num = (v) => (v === '' ? null : Number(v))
++            const created = await call(api.post, '/ingredients', {
++                body: {
++                    name: name.trim(),
++                    nutrition_basis_unit: unit,
++                    nutrition_basis_amount: Number(basis),
++                    per_100g_calories: num(cal),
++                    per_100g_protein: num(protein),
++                    per_100g_carbs: num(carbs),
++                    per_100g_fat: num(fat),
++                },
++            })
++            onCreated?.(created)
++        } catch (e) {
++            setError(e.message || '创建失败')
++        } finally {
++            setSubmitting(false)
++        }
++    }
++
++    return (
++        <div className="space-y-4">
++            <button
++                type="button"
++                className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"
++                onClick={onCancel}
++            >
++                <ArrowLeft className="h-4 w-4" /> 返回
++            </button>
++
++            <div>
++                <label className="mb-1 block text-sm font-medium text-slate-700">名称</label>
++                <input
++                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
++                    placeholder="如: 自制豆腐块"
++                    value={name}
++                    onChange={(e) => setName(e.target.value)}
++                />
++            </div>
++
++            {/* 营养基准: 每 [basis] [unit] */}
++            <div>
++                <label className="mb-1 block text-sm font-medium text-slate-700">
++                    营养信息(每 {basis || '?'} {unitLabel(unit)})
++                </label>
++                <div className="mb-2 flex items-center gap-2 text-sm">
++                    <span className="text-slate-500">每</span>
++                    <input
++                        type="number"
++                        className="w-20 rounded-md border border-slate-300 px-2 py-1.5"
++                        value={basis}
++                        onChange={(e) => setBasis(e.target.value)}
++                    />
++                    <select
++                        className="rounded-md border border-slate-300 px-2 py-1.5"
++                        value={unit}
++                        onChange={(e) => changeUnit(e.target.value)}
++                    >
++                        {FOOD_UNITS.map((u) => (
++                            <option key={u.value} value={u.value}>{u.label}</option>
++                        ))}
++                    </select>
++                </div>
++                <div className="grid grid-cols-2 gap-2">
++                    <NutInput label="热量 (kcal)" value={cal} onChange={setCal} />
++                    <NutInput label="蛋白 (g)" value={protein} onChange={setProtein} />
++                    <NutInput label="碳水 (g)" value={carbs} onChange={setCarbs} />
++                    <NutInput label="脂肪 (g)" value={fat} onChange={setFat} />
++                </div>
++                <p className="mt-1 text-xs text-slate-400">营养可留空(未知),之后用它算餐食营养。</p>
++            </div>
++
++            {error && <p className="text-sm text-red-500">{error}</p>}
++
++            <button
++                className="w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
++                onClick={submit}
++                disabled={submitting}
++            >
++                {submitting ? '创建中…' : '创建食物'}
++            </button>
++        </div>
++    )
++}
++
++function NutInput({ label, value, onChange }) {
++    return (
++        <div>
++            <label className="mb-1 block text-xs text-slate-500">{label}</label>
++            <input
++                type="number"
++                className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
++                placeholder="—"
++                value={value}
++                onChange={(e) => onChange(e.target.value)}
++            />
++        </div>
++    )
++}
+diff --git a/frontend/src/components/inventory/AddInventoryDialog.jsx b/frontend/src/components/inventory/AddInventoryDialog.jsx
+index d15330b..31461cc 100644
+--- a/frontend/src/components/inventory/AddInventoryDialog.jsx
++++ b/frontend/src/components/inventory/AddInventoryDialog.jsx
+@@ -1,16 +1,19 @@
+ // src/components/inventory/AddInventoryDialog.jsx
+-// 两步式加库存:
+-//   视图1 选食材(搜索公共库 + 我的食材 + 可创建新食材)
+-//   视图2 填详情(数量/过期日/储存区域)→ POST /inventory
+-import { ArrowLeft, Plus, Search } from 'lucide-react'
++// 三步式加库存:
++//   视图1 选食材(搜索公共库 + 我的食材 + 搜不到可创建)
++//   视图2 创建食物(选单位 + 每单位营养, A2)—— 仅搜不到时进入
++//   视图3 填详情(数量 + 单位[按食材 allowed_units] + 过期日 + 储存区域)→ POST /inventory
++import { Plus, Search } from 'lucide-react'
+ import { useEffect, useState } from 'react'
+ 
++import { CreateIngredientForm } from '@/components/ingredients/CreateIngredientForm'
+ import {
+     Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
+ } from '@/components/ui/dialog'
+ import { useApi } from '@/hooks/useApi'
+ import { useDebounce } from '@/hooks/useDebounce'
+ import { api } from '@/lib/api'
++import { unitLabel } from '@/lib/units'
+ 
+ const ZONES = [
+     { value: 'pantry', label: '常温' },
+@@ -20,15 +23,18 @@ const ZONES = [
+ 
+ export function AddInventoryDialog({ onAdded }) {
+     const [open, setOpen] = useState(false)
+-    const [step, setStep] = useState('select')     // 'select' | 'detail'
+-    const [chosen, setChosen] = useState(null)      // 选中的食材 {id, name}
++    const [step, setStep] = useState('select')     // 'select' | 'create' | 'detail'
++    const [chosen, setChosen] = useState(null)      // 选中的食材(含 allowed_units)
++    const [pendingName, setPendingName] = useState('')  // 待创建食材名
+ 
+     function close() {
+         setOpen(false)
+-        // 关闭后重置(延迟一点避免关闭动画时闪回)
+-        setTimeout(() => { setStep('select'); setChosen(null) }, 200)
++        setTimeout(() => { setStep('select'); setChosen(null); setPendingName('') }, 200)
+     }
+ 
++    const title = step === 'select' ? '选择食材'
++        : step === 'create' ? '创建食物' : '添加详情'
++
+     return (
+         <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
+             <DialogTrigger asChild>
+@@ -42,16 +48,23 @@ export function AddInventoryDialog({ onAdded }) {
+             </DialogTrigger>
+             <DialogContent>
+                 <DialogHeader>
+-                    <DialogTitle>
+-                        {step === 'select' ? '选择食材' : '添加详情'}
+-                    </DialogTitle>
++                    <DialogTitle>{title}</DialogTitle>
+                 </DialogHeader>
+ 
+-                {step === 'select' ? (
++                {step === 'select' && (
+                     <SelectIngredientView
+                         onPick={(ing) => { setChosen(ing); setStep('detail') }}
++                        onCreateNew={(name) => { setPendingName(name); setStep('create') }}
++                    />
++                )}
++                {step === 'create' && (
++                    <CreateIngredientForm
++                        initialName={pendingName}
++                        onCreated={(ing) => { setChosen(ing); setStep('detail') }}
++                        onCancel={() => setStep('select')}
+                     />
+-                ) : (
++                )}
++                {step === 'detail' && (
+                     <FillDetailView
+                         ingredient={chosen}
+                         onBack={() => setStep('select')}
+@@ -64,20 +77,18 @@ export function AddInventoryDialog({ onAdded }) {
+ }
+ 
+ // ── 视图1: 选食材(搜索 + 分组 + 创建) ──
+-function SelectIngredientView({ onPick }) {
++function SelectIngredientView({ onPick, onCreateNew }) {
+     const { call } = useApi()
+     const [query, setQuery] = useState('')
+     const debounced = useDebounce(query, 300)
+     const [results, setResults] = useState([])
+     const [loading, setLoading] = useState(false)
+-    const [creating, setCreating] = useState(false)
+ 
+     useEffect(() => {
+         let alive = true
+         async function search() {
+             setLoading(true)
+             try {
+-                // 有搜索词就带 name 过滤, 否则拉默认列表
+                 const params = debounced ? { name: debounced, limit: 50 } : { limit: 50 }
+                 const data = await call(api.get, '/ingredients', { params })
+                 if (alive) setResults(data || [])
+@@ -91,29 +102,12 @@ function SelectIngredientView({ onPick }) {
+         return () => { alive = false }
+     }, [debounced, call])
+ 
+-    // 分组: 我的(private) vs 公共(global)
+     const mine = results.filter((r) => r.visibility === 'private')
+     const global = results.filter((r) => r.visibility === 'global')
+     const noResult = !loading && results.length === 0 && debounced
+ 
+-    async function createIngredient() {
+-        if (!debounced) return
+-        try {
+-            setCreating(true)
+-            const created = await call(api.post, '/ingredients', {
+-                body: { name: debounced },
+-            })
+-            onPick({ id: created.id, name: created.name })   // 建完直接进详情
+-        } catch (e) {
+-            alert(e.message || '创建失败')
+-        } finally {
+-            setCreating(false)
+-        }
+-    }
+-
+     return (
+         <div className="space-y-3">
+-            {/* 搜索栏 */}
+             <div className="relative">
+                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                 <input
+@@ -125,7 +119,6 @@ function SelectIngredientView({ onPick }) {
+                 />
+             </div>
+ 
+-            {/* 结果列表 */}
+             <div className="max-h-72 space-y-3 overflow-y-auto">
+                 {loading && <p className="py-4 text-center text-sm text-slate-400">搜索中…</p>}
+ 
+@@ -136,15 +129,13 @@ function SelectIngredientView({ onPick }) {
+                     <IngredientGroup title="公共库" items={global} onPick={onPick} />
+                 )}
+ 
+-                {/* 搜不到 → 可创建 */}
+                 {noResult && (
+                     <button
+-                        className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-3 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+-                        onClick={createIngredient}
+-                        disabled={creating}
++                        className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-3 text-sm text-slate-600 hover:bg-slate-50"
++                        onClick={() => onCreateNew(debounced)}
+                     >
+                         <Plus className="h-4 w-4" />
+-                        {creating ? '创建中…' : `创建 "${debounced}"`}
++                        创建 "{debounced}"
+                     </button>
+                 )}
+ 
+@@ -165,7 +156,7 @@ function IngredientGroup({ title, items, onPick }) {
+                     <button
+                         key={ing.id}
+                         className="w-full rounded-md px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-100"
+-                        onClick={() => onPick({ id: ing.id, name: ing.name })}
++                        onClick={() => onPick(ing)}
+                     >
+                         {ing.name}
+                     </button>
+@@ -175,10 +166,15 @@ function IngredientGroup({ title, items, onPick }) {
+     )
+ }
+ 
+-// ── 视图2: 填详情 ──
++// ── 视图3: 填详情 ──
+ function FillDetailView({ ingredient, onBack, onDone }) {
+     const { call } = useApi()
++    // 单位选项来自后端 allowed_units(质量食材含克; 单位本位只有自己)
++    const units = (ingredient.allowed_units && ingredient.allowed_units.length > 0)
++        ? ingredient.allowed_units
++        : ['g']
+     const [amount, setAmount] = useState('')
++    const [unit, setUnit] = useState(units[0])
+     const [expiresAt, setExpiresAt] = useState('')
+     const [location, setLocation] = useState('fridge')
+     const [submitting, setSubmitting] = useState(false)
+@@ -193,7 +189,7 @@ function FillDetailView({ ingredient, onBack, onDone }) {
+                 body: {
+                     ingredient_id: ingredient.id,
+                     input_amount: Number(amount),
+-                    input_unit: 'g',
++                    input_unit: unit,
+                     expires_at: expiresAt || null,
+                     location,
+                 },
+@@ -208,24 +204,39 @@ function FillDetailView({ ingredient, onBack, onDone }) {
+ 
+     return (
+         <div className="space-y-4">
+-            {/* 选中的食材 + 返回 */}
+             <button
+                 className="flex items-center gap-2 text-sm font-medium text-slate-900"
+                 onClick={onBack}
+             >
+-                <ArrowLeft className="h-4 w-4" />
+-                {ingredient.name}
++                ← {ingredient.name}
+             </button>
+ 
+             <div>
+-                <label className="mb-1 block text-sm font-medium text-slate-700">数量 (克)</label>
+-                <input
+-                    type="number" autoFocus
+-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+-                    placeholder="例如 500"
+-                    value={amount}
+-                    onChange={(e) => setAmount(e.target.value)}
+-                />
++                <label className="mb-1 block text-sm font-medium text-slate-700">数量</label>
++                <div className="flex items-center gap-2">
++                    <input
++                        type="number" autoFocus
++                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
++                        placeholder="例如 500"
++                        value={amount}
++                        onChange={(e) => setAmount(e.target.value)}
++                    />
++                    {units.length > 1 ? (
++                        <select
++                            className="rounded-md border border-slate-300 px-2 py-2 text-sm"
++                            value={unit}
++                            onChange={(e) => setUnit(e.target.value)}
++                        >
++                            {units.map((u) => (
++                                <option key={u} value={u}>{unitLabel(u)}</option>
++                            ))}
++                        </select>
++                    ) : (
++                        <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
++                            {unitLabel(units[0])}
++                        </span>
++                    )}
++                </div>
+             </div>
+ 
+             <div>
+@@ -262,4 +273,4 @@ function FillDetailView({ ingredient, onBack, onDone }) {
+             </button>
+         </div>
+     )
+-}
+\ No newline at end of file
++}
+diff --git a/frontend/src/components/recipes/CreateRecipeDialog.jsx b/frontend/src/components/recipes/CreateRecipeDialog.jsx
+index 9903fbd..1994d58 100644
+--- a/frontend/src/components/recipes/CreateRecipeDialog.jsx
++++ b/frontend/src/components/recipes/CreateRecipeDialog.jsx
+@@ -1,16 +1,17 @@
+ // src/components/recipes/CreateRecipeDialog.jsx
+-// 手动创建菜谱弹窗(精简版): 菜名 + 做法说明 + 配料(≥1) → POST /recipes
+-// 配料的食材选择复用 AddInventoryDialog 的搜索模式(/ingredients?name=)。
+-// variant.name 后端必填, 精简版自动取菜名, 不额外让用户填。
++// 手动创建菜谱(精简版): 菜名 + 做法说明 + 配料(≥1) → POST /recipes
++// 配料的食材从库里搜/或现场创建(A2 单位本位), 单位下拉用后端 allowed_units。
+ import { Plus, Search, Trash2, X } from 'lucide-react'
+ import { useEffect, useState } from 'react'
+ 
++import { CreateIngredientForm } from '@/components/ingredients/CreateIngredientForm'
+ import {
+     Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
+ } from '@/components/ui/dialog'
+ import { useApi } from '@/hooks/useApi'
+ import { useDebounce } from '@/hooks/useDebounce'
+ import { api } from '@/lib/api'
++import { unitLabel } from '@/lib/units'
+ 
+ export function CreateRecipeDialog({ onCreated }) {
+     const { call } = useApi()
+@@ -22,7 +23,7 @@ export function CreateRecipeDialog({ onCreated }) {
+     const [cuisine, setCuisine] = useState('')
+     const [servings, setServings] = useState('')
+     const [instructions, setInstructions] = useState('')
+-    // 配料行: { ingredient: {id,name,default_unit} | null, amount, unit }
++    // 配料行: { ingredient|null, amount, unit, creating, pendingName }
+     const [rows, setRows] = useState([])
+ 
+     function reset() {
+@@ -31,14 +32,15 @@ export function CreateRecipeDialog({ onCreated }) {
+     }
+ 
+     function addRow() {
+-        setRows((rs) => [...rs, { ingredient: null, amount: '', unit: 'g' }])
++        setRows((rs) => [...rs, { ingredient: null, amount: '', unit: 'g', creating: false, pendingName: '' }])
+     }
+     function removeRow(i) {
+         setRows((rs) => rs.filter((_, idx) => idx !== i))
+     }
+     function setRowIngredient(i, ing) {
++        const units = ing.allowed_units && ing.allowed_units.length > 0 ? ing.allowed_units : ['g']
+         setRows((rs) => rs.map((r, idx) => idx === i
+-            ? { ...r, ingredient: ing, unit: ing.default_unit || 'g' }
++            ? { ...r, ingredient: ing, unit: units[0], creating: false }
+             : r))
+     }
+     function setRowField(i, field, val) {
+@@ -46,7 +48,6 @@ export function CreateRecipeDialog({ onCreated }) {
+     }
+ 
+     async function submit() {
+-        // 客户端校验(对齐后端约束)
+         if (!name.trim()) { setError('请填写菜名'); return }
+         if (!instructions.trim()) { setError('请填写做法说明'); return }
+         const filled = rows.filter((r) => r.ingredient && Number(r.amount) > 0)
+@@ -59,7 +60,7 @@ export function CreateRecipeDialog({ onCreated }) {
+                 name: name.trim(),
+                 cuisine: cuisine.trim() || null,
+                 variant: {
+-                    name: name.trim(),                 // 精简版: 做法名 = 菜名
++                    name: name.trim(),
+                     instructions: instructions.trim(),
+                     servings: servings ? Number(servings) : 1,
+                     ingredients: filled.map((r) => ({
+@@ -130,7 +131,6 @@ export function CreateRecipeDialog({ onCreated }) {
+                         </div>
+                     </div>
+ 
+-                    {/* 配料 */}
+                     <div>
+                         <div className="mb-1 flex items-center justify-between">
+                             <label className="text-sm font-medium text-slate-700">配料</label>
+@@ -144,7 +144,7 @@ export function CreateRecipeDialog({ onCreated }) {
+                         </div>
+                         {rows.length === 0 && (
+                             <p className="rounded-md border border-dashed border-slate-300 px-3 py-3 text-center text-sm text-slate-400">
+-                                点"添加配料"从食材库选择
++                                点"添加配料"从食材库选择或创建
+                             </p>
+                         )}
+                         <div className="space-y-2">
+@@ -186,8 +186,21 @@ export function CreateRecipeDialog({ onCreated }) {
+     )
+ }
+ 
+-// 一条配料: 未选食材 → 内联搜索; 已选 → 名字 + 数量 + 单位 + 删除
++// 一条配料: 未选 → 搜索 / 创建食物; 已选 → 名字 + 数量 + 单位 + 删除
+ function IngredientRow({ row, onPick, onField, onRemove }) {
++    // 创建食物模式
++    if (row.creating) {
++        return (
++            <div className="rounded-md border border-slate-200 p-3">
++                <CreateIngredientForm
++                    initialName={row.pendingName}
++                    onCreated={(ing) => onPick(ing)}
++                    onCancel={() => onField('creating', false)}
++                />
++            </div>
++        )
++    }
++    // 未选食材: 搜索
+     if (!row.ingredient) {
+         return (
+             <div className="rounded-md border border-slate-200 p-2">
+@@ -197,13 +210,16 @@ function IngredientRow({ row, onPick, onField, onRemove }) {
+                         <X className="h-4 w-4" />
+                     </button>
+                 </div>
+-                <InlineIngredientSearch onPick={onPick} />
++                <InlineIngredientSearch
++                    onPick={onPick}
++                    onCreateNew={(name) => { onField('pendingName', name); onField('creating', true) }}
++                />
+             </div>
+         )
+     }
+-    // 单位选项: g + 该食材 default_unit(去重)
+-    const units = row.ingredient.default_unit && row.ingredient.default_unit !== 'g'
+-        ? [row.ingredient.default_unit, 'g']
++    // 已选: 单位来自 allowed_units
++    const units = row.ingredient.allowed_units && row.ingredient.allowed_units.length > 0
++        ? row.ingredient.allowed_units
+         : ['g']
+     return (
+         <div className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2">
+@@ -215,13 +231,19 @@ function IngredientRow({ row, onPick, onField, onRemove }) {
+                 value={row.amount}
+                 onChange={(e) => onField('amount', e.target.value)}
+             />
+-            <select
+-                className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+-                value={row.unit}
+-                onChange={(e) => onField('unit', e.target.value)}
+-            >
+-                {units.map((u) => <option key={u} value={u}>{u}</option>)}
+-            </select>
++            {units.length > 1 ? (
++                <select
++                    className="rounded-md border border-slate-300 px-2 py-1 text-sm"
++                    value={row.unit}
++                    onChange={(e) => onField('unit', e.target.value)}
++                >
++                    {units.map((u) => <option key={u} value={u}>{unitLabel(u)}</option>)}
++                </select>
++            ) : (
++                <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-sm text-slate-500">
++                    {unitLabel(units[0])}
++                </span>
++            )}
+             <button type="button" onClick={onRemove} className="text-slate-400 hover:text-red-500">
+                 <Trash2 className="h-4 w-4" />
+             </button>
+@@ -229,14 +251,13 @@ function IngredientRow({ row, onPick, onField, onRemove }) {
+     )
+ }
+ 
+-// 内联食材搜索(复用 AddInventoryDialog 模式: /ingredients?name= + 分组 + 可创建)
+-function InlineIngredientSearch({ onPick }) {
++// 内联食材搜索(/ingredients?name= + 分组); 搜不到 → 交给父级切"创建食物"
++function InlineIngredientSearch({ onPick, onCreateNew }) {
+     const { call } = useApi()
+     const [query, setQuery] = useState('')
+     const debounced = useDebounce(query, 300)
+     const [results, setResults] = useState([])
+     const [loading, setLoading] = useState(false)
+-    const [creating, setCreating] = useState(false)
+ 
+     useEffect(() => {
+         let alive = true
+@@ -260,19 +281,6 @@ function InlineIngredientSearch({ onPick }) {
+ 
+     const noResult = !loading && results.length === 0 && debounced
+ 
+-    async function createIngredient() {
+-        if (!debounced) return
+-        try {
+-            setCreating(true)
+-            const created = await call(api.post, '/ingredients', { body: { name: debounced } })
+-            onPick({ id: created.id, name: created.name, default_unit: created.default_unit || 'g' })
+-        } catch (e) {
+-            alert(e.message || '创建失败')
+-        } finally {
+-            setCreating(false)
+-        }
+-    }
+-
+     return (
+         <div>
+             <div className="relative">
+@@ -293,7 +301,7 @@ function InlineIngredientSearch({ onPick }) {
+                             key={ing.id}
+                             type="button"
+                             className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm text-slate-800 hover:bg-slate-100"
+-                            onClick={() => onPick({ id: ing.id, name: ing.name, default_unit: ing.default_unit || 'g' })}
++                            onClick={() => onPick(ing)}
+                         >
+                             <span>{ing.name}</span>
+                             {ing.visibility === 'private' && (
+@@ -304,12 +312,11 @@ function InlineIngredientSearch({ onPick }) {
+                     {noResult && (
+                         <button
+                             type="button"
+-                            className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+-                            onClick={createIngredient}
+-                            disabled={creating}
++                            className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
++                            onClick={() => onCreateNew(debounced)}
+                         >
+                             <Plus className="h-4 w-4" />
+-                            {creating ? '创建中…' : `创建 "${debounced}"`}
++                            创建 "{debounced}"
+                         </button>
+                     )}
+                 </div>
+diff --git a/frontend/src/lib/units.js b/frontend/src/lib/units.js
+new file mode 100644
+index 0000000..d2ff58c
+--- /dev/null
++++ b/frontend/src/lib/units.js
+@@ -0,0 +1,58 @@
++// src/lib/units.js
++// 食物单位清单(A2 单位本位)。value = 存进后端 nutrition_basis_unit 的值; label = 显示。
++// 质量/容量: 克/毫升 用英文 value 'g'/'ml'(与食材库/USDA 一致, 后端据此识别可换算克);
++// 其余为"单位本位"原子单位, value == label(中文), 后端视为该食材唯一单位、不换算克。
++export const FOOD_UNITS = [
++    { value: 'g', label: '克' },
++    { value: 'ml', label: '毫升' },
++    { value: '个', label: '个' },
++    { value: '只', label: '只' },
++    { value: '根', label: '根' },
++    { value: '片', label: '片' },
++    { value: '块', label: '块' },
++    { value: '瓣', label: '瓣' },
++    { value: '颗', label: '颗' },
++    { value: '粒', label: '粒' },
++    { value: '条', label: '条' },
++    { value: '张', label: '张' },
++    { value: '份', label: '份' },
++    { value: '袋', label: '袋' },
++    { value: '包', label: '包' },
++    { value: '盒', label: '盒' },
++    { value: '罐', label: '罐' },
++    { value: '瓶', label: '瓶' },
++    { value: '桶', label: '桶' },
++    { value: '杯', label: '杯' },
++    { value: '碗', label: '碗' },
++    { value: '勺', label: '勺' },
++    { value: '汤匙', label: '汤匙' },
++    { value: '茶匙', label: '茶匙' },
++    { value: '把', label: '把' },
++    { value: '束', label: '束' },
++    { value: '枝', label: '枝' },
++    { value: '朵', label: '朵' },
++    { value: '头', label: '头' },
++    { value: '枚', label: '枚' },
++    { value: '段', label: '段' },
++    { value: '斤', label: '斤' },
++    { value: '两', label: '两' },
++    { value: '滴', label: '滴' },
++    { value: '撮', label: '撮' },
++]
++
++// 已知单位 → 中文显示(含食材库英文单位)。未知回退原值。
++const LABELS = {
++    g: '克', ml: '毫升', kg: '千克', l: '升',
++    piece: '个', cup: '杯', block: '块', slice: '片', clove: '瓣',
++    tbsp: '汤匙', tsp: '茶匙',
++}
++for (const u of FOOD_UNITS) LABELS[u.value] = u.label
++
++export function unitLabel(u) {
++    return LABELS[u] || u
++}
++
++// 质量/容量单位默认按"每 100"填营养; 其余原子单位按"每 1"。
++export function defaultBasisFor(unitValue) {
++    return unitValue === 'g' || unitValue === 'ml' ? 100 : 1
++}
