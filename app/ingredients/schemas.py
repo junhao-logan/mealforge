@@ -22,6 +22,11 @@ class IngredientRead(BaseModel):
     # 可见性(I11): 'private'(自建, 仅自己可见) / 'global'(共享)
     # 前端可据此打"私人创建"标签
     visibility: str
+    # 营养基准 (A2): 营养 = 每 nutrition_basis_amount 个 nutrition_basis_unit
+    nutrition_basis_amount: Decimal
+    nutrition_basis_unit: str
+    # 该食材在库存/菜谱里可选的单位(后端算好, 前端直接用): 质量食材含克, 单位本位只有自己
+    allowed_units: list[str]
 
 
 class IngredientCreate(BaseModel):
@@ -35,4 +40,8 @@ class IngredientCreate(BaseModel):
     per_100g_fat: Decimal | None = Field(default=None, ge=0)
     default_unit: str = Field(default="g", max_length=20)
     grams_per_unit: Decimal = Field(default=Decimal("1.0"), gt=0)
+    # 营养基准 (A2): 用户自建"单位本位"食材时, 营养按"每 N 个所选单位"填。
+    # 默认 (100, 'g') = 传统每100克。前端"创建食物"弹窗据此提交。
+    nutrition_basis_amount: Decimal = Field(default=Decimal("100"), gt=0)
+    nutrition_basis_unit: str = Field(default="g", max_length=20)
     shelf_life_days: int | None = Field(default=None, ge=0)

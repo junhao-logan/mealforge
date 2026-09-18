@@ -23,7 +23,7 @@ from app.recipes.schemas import (
 from app.recipes.services import (
     compute_variant_nutrition,
     recommend_recipes,
-    resolve_grams,
+    resolve_quantity,
 )
 from app.users.models import User
 
@@ -81,10 +81,10 @@ async def create_recipe(
         ingredient = ing_map.get(ri.ingredient_id)
         if ingredient is None:
             raise HTTPException(404, f"食材 id={ri.ingredient_id} 不存在")
-        grams = await resolve_grams(db, ingredient, ri.input_amount, ri.input_unit)
+        quantity = resolve_quantity(ingredient, ri.input_amount, ri.input_unit)
         recipe_ing = RecipeIngredient(
             ingredient_id=ingredient.id,
-            quantity_grams=grams,
+            quantity_grams=quantity,
             input_amount=ri.input_amount,
             input_unit=ri.input_unit,
         )

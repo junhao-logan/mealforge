@@ -1,14 +1,17 @@
 # app/inventory/services.py
 from __future__ import annotations
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.ingredients.models import Ingredient
 from app.inventory.models import InventoryItem, InventoryTransaction
 from app.inventory.schemas import InventoryItemCreate, InventoryItemUpdate
 from datetime import date, timedelta
 from decimal import Decimal
 from app.recipes.models import RecipeIngredient
+from app.recipes.services import resolve_quantity
 from app.meal_plans.models import MealPlanEntry
 from app.meal_plans.services import line_demand   # I13 需求公式(单一真相源)
 
@@ -19,13 +22,20 @@ async def create_inventory_item(
 ) -> InventoryItem:
     """入库一个批次 + 记一条 purchase 流水(I2)。
     两张表同事务写入: flush 拿 item.id, 由 router 统一 commit。
-    Week 5: 输入即克, quantity_grams = input_amount。
+    A2: 按食材规范单位换算 —— input_unit 经 resolve_quantity 转成规范单位下的量存入
+    quantity_grams(质量食材=克; 单位本位食材=个/块)。
     """
-    # 1) 建库存批次(model 对象)。quantity_grams = 输入量(克本位, I3)
+    # 0) 取食材, 用其规范单位换算输入量(单位本位食材只接受自己的单位, 不接受克)
+    ingredient = await db.get(Ingredient, data.ingredient_id)
+    if ingredient is None:
+        raise HTTPException(404, f"食材 id={data.ingredient_id} 不存在")
+    quantity = resolve_quantity(ingredient, data.input_amount, data.input_unit)
+
+    # 1) 建库存批次。quantity_grams = 换算后的规范单位量(I3 克本位 / A2 单位本位)
     item = InventoryItem(
         user_id=user_id,
         ingredient_id=data.ingredient_id,
-        quantity_grams=data.input_amount,   # 输入即克
+        quantity_grams=quantity,            # 规范单位下的量
         input_amount=data.input_amount,     # D5=B: 原始输入也存, 展示用
         input_unit=data.input_unit,
         purchased_at=data.purchased_at,
@@ -40,7 +50,7 @@ async def create_inventory_item(
         user_id=user_id,
         ingredient_id=data.ingredient_id,
         inventory_item_id=item.id,          # 关联刚建的批次
-        delta_grams=data.input_amount,      # 入库为正
+        delta_grams=quantity,               # 入库为正(规范单位)
         reason="purchase",
     )
     db.add(txn)

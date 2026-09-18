@@ -12,19 +12,26 @@ from app.inventory.models import InventoryItem
 from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
 
 
-async def resolve_grams(
-    db: AsyncSession, ingredient: Ingredient, input_amount: Decimal, input_unit: str
+def resolve_quantity(
+    ingredient: Ingredient, input_amount: Decimal, input_unit: str
 ) -> Decimal:
-    """D5: 把'用户单位+数量'换算成克。单位限 'g' 或该食材 default_unit(D5a)。"""
-    if input_unit == "g":
-        return input_amount  # 克 → 克, ×1
-    if input_unit == ingredient.default_unit:
+    """把'用户单位 + 数量'换算成该食材【规范单位】下的量(A2)。
+
+    规范单位 = ingredient.nutrition_basis_unit(质量食材为 'g'/'ml', 单位本位为 '块'/'个' 等)。
+      · input_unit == 规范单位 → 直接返回(已是规范单位下的量)
+      · 规范单位是质量(g/ml) 且 input_unit == 展示单位(default_unit) → × grams_per_unit
+        (库存/审核食材可用克或其份量单位, 如鸡胸: piece → ×120g)
+      · 其他 → 422(单位本位食材只接受它自己的单位, 不给克)
+    兜底: 未从 DB 刷新时 nutrition_basis_unit 可能为 None, 视为 'g'。
+    """
+    canonical = ingredient.nutrition_basis_unit or "g"
+    if input_unit == canonical:
+        return input_amount
+    if canonical in ("g", "ml") and input_unit == ingredient.default_unit:
         return input_amount * ingredient.grams_per_unit
-    # 其他单位 MVP 不支持(多单位换算表留 Phase 2)
     raise HTTPException(
         status_code=422,
-        detail=f"食材 '{ingredient.name}' 只支持单位 'g' 或 '{ingredient.default_unit}',"
-               f" 收到 '{input_unit}'",
+        detail=f"食材 '{ingredient.name}' 只支持单位 {ingredient.allowed_units}, 收到 '{input_unit}'",
     )
 
 
@@ -48,17 +55,19 @@ def compute_variant_nutrition(variant: RecipeVariant) -> None:
     }
 
     for ri in variant.ingredients:
-        grams = ri.quantity_grams
-        total_grams += grams
+        qty = ri.quantity_grams   # 规范单位下的量(质量食材=克, 单位本位=个/块)
+        total_grams += qty
         ing = ri.ingredient
+        # 营养基准: 每 basis_amount 个规范单位。兜底 100(未刷新的对象)。
+        basis_amount = ing.nutrition_basis_amount or Decimal("100")
         for key, col in fields.items():
             if sums[key] is None:
                 continue  # 已被标记 unknown, 跳过
-            per_100g = getattr(ing, col)
-            if per_100g is None:
+            per_basis = getattr(ing, col)
+            if per_basis is None:
                 sums[key] = None  # 这条食材该营养未知 → 整道菜该项 unknown
             else:
-                sums[key] += per_100g * grams / Decimal("100")
+                sums[key] += per_basis * qty / basis_amount
 
     variant.total_grams = total_grams
     variant.total_calories = sums["calories"]
