@@ -136,8 +136,9 @@ export function MealPlansPage() {
                 >
                     {isWeek ? t('mealPlans.backToWeek') : t('mealPlans.backToToday')}
                 </button>
-                {/* 选中某plan时, 右侧显示删除(避免误触) */}
-                {activePlanId !== null && (
+                {/* 选中某plan时, 右侧显示删除(避免误触); 默认 plan(Quick Log)不可删除, 不显示按钮 */}
+                {activePlanId !== null
+                    && plans.find((p) => p.id === activePlanId)?.plan_type !== 'default' && (
                     <div className="ml-auto">
                         <DeletePlanButton
                             plan={plans.find((p) => p.id === activePlanId) || { id: activePlanId }}

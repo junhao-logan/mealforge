@@ -213,6 +213,7 @@
     "errPickMeal": "Pick at least one meal slot",
     "errNoRecipes": "No recipes available — create some on the Recipes page or generate with AI first",
     "allPlans": "All plans",
+    "defaultPlanName": "Quick Log",
     "newPlan": "New plan",
     "planName": "Plan name",
     "planNamePh": "e.g. Cutting week, Bulking plan",

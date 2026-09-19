@@ -213,6 +213,7 @@
     "errPickMeal": "至少选一个餐段",
     "errNoRecipes": "没有可用菜谱,先去菜谱页创建或 AI 生成几道菜",
     "allPlans": "全部计划",
+    "defaultPlanName": "Quick Log",
     "newPlan": "新建计划",
     "planName": "计划名",
     "planNamePh": "例如: 减脂周、增肌计划",

@@ -143,6 +143,10 @@ async def list_plans(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ) -> list[MealPlan]:
+    # 保证用户永远有一个默认 plan(Quick Log): 没有就建, 幂等。
+    # 前端删不了默认 plan(见 delete_plan 守卫), 但历史用户可能没有, 这里兜底。
+    await get_or_create_default_plan(db, user.id)
+    await db.commit()
     stmt = (
         select(MealPlan)
         .where(MealPlan.user_id == user.id)
@@ -324,6 +328,9 @@ async def delete_plan(
     redis: Redis = Depends(get_redis),
 ) -> None:
     plan = await _get_owned_plan(db, plan_id, user)
+    # 默认 plan(Quick Log)是系统级收纳计划, 不可删除(前端也不显示删除按钮, 这里硬兜底)
+    if plan.plan_type == "default":
+        raise HTTPException(400, "默认计划(Quick Log)不可删除")
     days = _dates_in(plan.start_date, plan.end_date)   # 删前记下覆盖的天
     await db.delete(plan)
     await db.commit()

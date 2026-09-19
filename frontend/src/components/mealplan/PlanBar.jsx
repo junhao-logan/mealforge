@@ -59,7 +59,9 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                         }`}
                     onClick={() => onSelect(p.id)}
                 >
-                    {p.name || t('mealPlans.planFallback', { id: p.id })}
+                    {p.plan_type === 'default'
+                        ? t('mealPlans.defaultPlanName')
+                        : (p.name || t('mealPlans.planFallback', { id: p.id }))}
                 </button>
             ))}
 

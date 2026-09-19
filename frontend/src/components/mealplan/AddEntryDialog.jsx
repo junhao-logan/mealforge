@@ -28,10 +28,11 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
     const [submitting, setSubmitting] = useState(false)
     const [error, setError] = useState(null)
 
-    // 默认选中当前筛选的 plan(没有则第一个)
+    // 默认选中的 plan 优先级: ①当前筛选的 → ②default plan(快速记录) → ③第一个 → ④空
     useEffect(() => {
         if (!open) return
-        setPlanId(String(defaultPlanId || plans[0]?.id || ''))
+        const defaultPlan = plans.find((p) => p.plan_type === 'default')
+        setPlanId(String(defaultPlanId || defaultPlan?.id || plans[0]?.id || ''))
     }, [open, defaultPlanId, plans])
 
     useEffect(() => {
@@ -104,7 +105,11 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
                             onChange={(e) => setPlanId(e.target.value)}
                         >
                             {plans.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name || t('mealPlans.planFallback', { id: p.id })}</option>
+                                <option key={p.id} value={p.id}>
+                                    {p.plan_type === 'default'
+                                        ? t('mealPlans.defaultPlanName')
+                                        : (p.name || t('mealPlans.planFallback', { id: p.id }))}
+                                </option>
                             ))}
                         </select>
                     </div>
