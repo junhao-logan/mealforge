@@ -1,0 +1,77 @@
+{
+  "app": { "name": "MealForge", "tagline": "AI meal management" },
+  "nav": {
+    "dashboard": "Today",
+    "inventory": "Inventory",
+    "recipes": "Recipes",
+    "mealPlans": "Meal Plans",
+    "shopping": "Shopping",
+    "nutrition": "Nutrition",
+    "account": "Account"
+  },
+  "landing": { "signIn": "Sign in" },
+  "account": {
+    "title": "Account",
+    "signedInAs": "Signed in as",
+    "settings": "Settings",
+    "language": "Language",
+    "languageHint": "Applies to the interface. Your own foods and AI content stay in the language they were created in.",
+    "english": "English",
+    "chinese": "中文",
+    "signOut": "Sign out"
+  },
+  "common": {
+    "loading": "Loading…",
+    "errorPrefix": "Error: {{msg}}",
+    "loadFailed": "Failed to load",
+    "deleteFailed": "Failed to delete",
+    "delete": "Delete"
+  },
+  "meal": {
+    "breakfast": "Breakfast",
+    "lunch": "Lunch",
+    "dinner": "Dinner",
+    "snack": "Snack",
+    "servings": "{{count}} servings",
+    "completed": "Done",
+    "complete": "Complete",
+    "confirmDelete": "Delete this entry?",
+    "completeFailed": "Failed to complete",
+    "shortStock": "Done, but {{count}} item(s) short on stock"
+  },
+  "macro": {
+    "calories": "Calories",
+    "protein": "Protein",
+    "carbs": "Carbs",
+    "fat": "Fat",
+    "noTarget": "No target set"
+  },
+  "dashboard": {
+    "nutrition": "Today's nutrition",
+    "noGoal": "No nutrition goal set yet",
+    "setGoal": "Set one",
+    "meals": "Today's meals",
+    "toPlans": "Meal plans",
+    "noMeals": "Nothing planned today — add meals in Meal Plans",
+    "expiring": "Expiring soon",
+    "toInventory": "Inventory",
+    "allFresh": "Nothing expiring — all fresh",
+    "expiresOn": "expires {{date}}",
+    "expiringTag": "expiring"
+  },
+  "inventory": {
+    "title": "Inventory",
+    "food": "Food #{{id}}",
+    "confirmDelete": "Delete this inventory item?",
+    "zonePantry": "Pantry",
+    "zoneFridge": "Fridge",
+    "zoneFreezer": "Freezer",
+    "zoneUnzoned": "Unassigned",
+    "count": "{{count}} items",
+    "empty": "Empty",
+    "expired": "Expired",
+    "expiring": "Expiring",
+    "expiresAt": "expires {{date}}",
+    "noExpiry": "no expiry date"
+  }
+}

@@ -1,6 +1,9 @@
 // src/components/dashboard/MacroCard.jsx
 // 单项营养卡: 消耗/目标 + 进度条。NULL 语义: consumed=None不完整, target=None没设目标。
+import { useTranslation } from 'react-i18next'
+
 export function MacroCard({ label, unit, macro, accent = 'bg-slate-900' }) {
+    const { t } = useTranslation()
     const consumed = macro?.consumed
     const target = macro?.target
     const percent = macro?.percent
@@ -36,7 +39,7 @@ export function MacroCard({ label, unit, macro, accent = 'bg-slate-900' }) {
                 </div>
             )}
             {!hasTarget && (
-                <div className="mt-2 text-xs text-slate-300">未设目标</div>
+                <div className="mt-2 text-xs text-slate-300">{t('macro.noTarget')}</div>
             )}
         </div>
     )

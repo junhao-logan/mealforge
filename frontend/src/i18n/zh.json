@@ -1,0 +1,77 @@
+{
+  "app": { "name": "MealForge", "tagline": "AI 膳食管理" },
+  "nav": {
+    "dashboard": "今日",
+    "inventory": "库存",
+    "recipes": "菜谱",
+    "mealPlans": "餐计划",
+    "shopping": "采购",
+    "nutrition": "营养目标",
+    "account": "账户"
+  },
+  "landing": { "signIn": "登录" },
+  "account": {
+    "title": "账户",
+    "signedInAs": "已登录",
+    "settings": "设置",
+    "language": "语言",
+    "languageHint": "仅影响界面语言。你自建的食材和 AI 生成内容保持创建时的语言。",
+    "english": "English",
+    "chinese": "中文",
+    "signOut": "退出登录"
+  },
+  "common": {
+    "loading": "加载中…",
+    "errorPrefix": "出错了: {{msg}}",
+    "loadFailed": "加载失败",
+    "deleteFailed": "删除失败",
+    "delete": "删除"
+  },
+  "meal": {
+    "breakfast": "早餐",
+    "lunch": "午餐",
+    "dinner": "晚餐",
+    "snack": "加餐",
+    "servings": "{{count}} 份",
+    "completed": "已完成",
+    "complete": "完成",
+    "confirmDelete": "确定删除?",
+    "completeFailed": "完成失败",
+    "shortStock": "已完成,但库存不足 {{count}} 样"
+  },
+  "macro": {
+    "calories": "热量",
+    "protein": "蛋白质",
+    "carbs": "碳水",
+    "fat": "脂肪",
+    "noTarget": "未设目标"
+  },
+  "dashboard": {
+    "nutrition": "今日营养",
+    "noGoal": "还没设置营养目标",
+    "setGoal": "去设置",
+    "meals": "今日餐次",
+    "toPlans": "去餐计划",
+    "noMeals": "今天还没安排,去餐计划排一下",
+    "expiring": "临期提醒",
+    "toInventory": "去库存",
+    "allFresh": "没有临期食材,一切新鲜",
+    "expiresOn": "{{date}} 过期",
+    "expiringTag": "临期"
+  },
+  "inventory": {
+    "title": "库存",
+    "food": "食材 #{{id}}",
+    "confirmDelete": "确定删除这条库存?",
+    "zonePantry": "常温",
+    "zoneFridge": "冷藏",
+    "zoneFreezer": "冷冻",
+    "zoneUnzoned": "未指定区域",
+    "count": "{{count}} 项",
+    "empty": "空",
+    "expired": "已过期",
+    "expiring": "临期",
+    "expiresAt": "过期 {{date}}",
+    "noExpiry": "无过期日"
+  }
+}

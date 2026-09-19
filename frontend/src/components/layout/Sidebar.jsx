@@ -2,31 +2,34 @@
 // 左侧固定导航栏 —— 所有页面共用。NavLink 高亮当前页。
 import { UserButton } from '@clerk/clerk-react'
 import {
-    LayoutDashboard, Package, BookOpen, CalendarDays, ShoppingCart, Target,
+    LayoutDashboard, Package, BookOpen, CalendarDays, ShoppingCart, Target, User,
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { NavLink } from 'react-router'
 
-// 导航项集中定义, 加页面只改这里(复用)
+// 导航项集中定义, 加页面只改这里(复用)。labelKey → i18n 键
 const NAV_ITEMS = [
-    { to: '/', label: '今日', icon: LayoutDashboard, end: true },
-    { to: '/inventory', label: '库存', icon: Package },
-    { to: '/recipes', label: '菜谱', icon: BookOpen },
-    { to: '/meal-plans', label: '餐计划', icon: CalendarDays },
-    { to: '/shopping', label: '采购', icon: ShoppingCart },
-    { to: '/nutrition', label: '营养目标', icon: Target },
+    { to: '/', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
+    { to: '/inventory', labelKey: 'nav.inventory', icon: Package },
+    { to: '/recipes', labelKey: 'nav.recipes', icon: BookOpen },
+    { to: '/meal-plans', labelKey: 'nav.mealPlans', icon: CalendarDays },
+    { to: '/shopping', labelKey: 'nav.shopping', icon: ShoppingCart },
+    { to: '/nutrition', labelKey: 'nav.nutrition', icon: Target },
+    { to: '/account', labelKey: 'nav.account', icon: User },
 ]
 
 export function Sidebar() {
+    const { t } = useTranslation()
     return (
         <aside className="flex h-screen w-60 flex-col border-r bg-white">
             {/* Logo */}
             <div className="flex h-16 items-center gap-2 border-b px-6">
-                <span className="text-xl font-bold text-slate-900">MealForge</span>
+                <span className="text-xl font-bold text-slate-900">{t('app.name')}</span>
             </div>
 
             {/* 导航 */}
             <nav className="flex-1 space-y-1 p-3">
-                {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+                {NAV_ITEMS.map(({ to, labelKey, icon: Icon, end }) => (
                     <NavLink
                         key={to}
                         to={to}
@@ -39,7 +42,7 @@ export function Sidebar() {
                         }
                     >
                         <Icon className="h-5 w-5" />
-                        {label}
+                        {t(labelKey)}
                     </NavLink>
                 ))}
             </nav>
