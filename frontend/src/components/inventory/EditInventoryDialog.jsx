@@ -1,6 +1,7 @@
 // src/components/inventory/EditInventoryDialog.jsx
 // 编辑库存批次: 改数量/过期日/储存区 → PATCH /inventory/{id}(盘点修正)
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -8,14 +9,16 @@ import {
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 
+// 储存区: value 存后端, labelKey 显示('' = 未指定)
 const ZONES = [
-    { value: 'fridge', label: '冷藏' },
-    { value: 'pantry', label: '常温' },
-    { value: 'freezer', label: '冷冻' },
-    { value: '', label: '未指定' },
+    { value: 'fridge', labelKey: 'inventory.zoneFridge' },
+    { value: 'pantry', labelKey: 'inventory.zonePantry' },
+    { value: 'freezer', labelKey: 'inventory.zoneFreezer' },
+    { value: '', labelKey: 'inventory.zoneUnspecified' },
 ]
 
 export function EditInventoryDialog({ item, name, onClose, onSaved }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [quantity, setQuantity] = useState('')
     const [expiresAt, setExpiresAt] = useState('')
@@ -34,7 +37,7 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
     }, [item])
 
     async function save() {
-        if (quantity === '' || Number(quantity) < 0) { setError('请填写有效数量(可为0)'); return }
+        if (quantity === '' || Number(quantity) < 0) { setError(t('inventory.errAmountZero')); return }
         try {
             setSubmitting(true)
             setError(null)
@@ -48,7 +51,7 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
             onSaved?.()
             onClose?.()
         } catch (e) {
-            setError(e.message || '保存失败')
+            setError(e.message || t('common.saveFailed'))
         } finally {
             setSubmitting(false)
         }
@@ -58,21 +61,21 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
         <Dialog open={item !== null} onOpenChange={(o) => { if (!o) onClose?.() }}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>编辑 · {name}</DialogTitle>
+                    <DialogTitle>{t('inventory.editTitle', { name })}</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">数量 (克)</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.quantityGrams')}</label>
                         <input
                             type="number" min="0" autoFocus
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                             value={quantity}
                             onChange={(e) => setQuantity(e.target.value)}
                         />
-                        <p className="mt-1 text-xs text-slate-400">盘点修正当前余量,可填 0(吃完了)。</p>
+                        <p className="mt-1 text-xs text-slate-400">{t('inventory.editHint')}</p>
                     </div>
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">过期日期</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.expiry')}</label>
                         <input
                             type="date"
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -81,14 +84,14 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
                         />
                     </div>
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">储存区域</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.storageZone')}</label>
                         <select
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                             value={location}
                             onChange={(e) => setLocation(e.target.value)}
                         >
                             {ZONES.map((z) => (
-                                <option key={z.value} value={z.value}>{z.label}</option>
+                                <option key={z.value} value={z.value}>{t(z.labelKey)}</option>
                             ))}
                         </select>
                     </div>
@@ -98,7 +101,7 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
                         onClick={save}
                         disabled={submitting}
                     >
-                        {submitting ? '保存中…' : '保存'}
+                        {submitting ? t('common.saving') : t('common.save')}
                     </button>
                 </div>
             </DialogContent>

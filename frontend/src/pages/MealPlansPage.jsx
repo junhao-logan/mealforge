@@ -1,6 +1,7 @@
 // src/pages/MealPlansPage.jsx —— 餐计划(天/周视图 + 周横竖 + plan管理 + AI生成)
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { AddEntryDialog } from '@/components/mealplan/AddEntryDialog'
 import { GenerateMealPlanDialog } from '@/components/mealplan/GenerateMealPlanDialog'
@@ -13,6 +14,7 @@ import {
 } from '@/lib/dateRange'
 
 export function MealPlansPage() {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [granularity, setGranularity] = useState('week')   // 'day' | 'week'
     const [orientation, setOrientation] = useState('vertical')  // 周视图: 'vertical' | 'horizontal'
@@ -43,11 +45,11 @@ export function MealPlansPage() {
             setEntries(data || [])
             setPlans(planList || [])
         } catch (e) {
-            setError(e.message || '加载失败')
+            setError(e.message || t('common.loadFailed'))
         } finally {
             setLoading(false)
         }
-    }, [call, rangeStart, rangeEnd])
+    }, [call, rangeStart, rangeEnd, t])
 
     useEffect(() => { reload() }, [reload])
 
@@ -62,21 +64,21 @@ export function MealPlansPage() {
                 `/meal-plans/${entry.plan_id}/entries/${entry.id}/complete`,
             )
             if (res?.shortfalls?.length > 0) {
-                alert(`已完成,但库存不足 ${res.shortfalls.length} 样(短缺已记录,可去采购)`)
+                alert(t('mealPlans.shortStock', { count: res.shortfalls.length }))
             }
             await reload()
         } catch (e) {
-            alert(e.message || '完成失败')
+            alert(e.message || t('meal.completeFailed'))
         }
     }
 
     async function handleDelete(entry) {
-        if (!confirm('确定删除这条餐次?')) return
+        if (!confirm(t('mealPlans.confirmDeleteEntry'))) return
         try {
             await call(api.del, `/meal-plans/${entry.plan_id}/entries/${entry.id}`)
             await reload()
         } catch (e) {
-            alert(e.message || '删除失败')
+            alert(e.message || t('common.deleteFailed'))
         }
     }
 
@@ -84,18 +86,18 @@ export function MealPlansPage() {
         <div>
             {/* 顶部: 标题 + 视图切换 + AI 生成 */}
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-                <h1 className="text-2xl font-bold text-slate-900">餐计划</h1>
+                <h1 className="text-2xl font-bold text-slate-900">{t('mealPlans.title')}</h1>
                 <div className="flex items-center gap-3">
                     {/* 天/周 开关 */}
                     <Segmented
-                        options={[{ v: 'day', l: '天' }, { v: 'week', l: '周' }]}
+                        options={[{ v: 'day', l: t('mealPlans.day') }, { v: 'week', l: t('mealPlans.week') }]}
                         value={granularity}
                         onChange={setGranularity}
                     />
                     {/* 周视图才有横竖开关 */}
                     {isWeek && (
                         <Segmented
-                            options={[{ v: 'vertical', l: '竖' }, { v: 'horizontal', l: '横' }]}
+                            options={[{ v: 'vertical', l: t('mealPlans.vertical') }, { v: 'horizontal', l: t('mealPlans.horizontal') }]}
                             value={orientation}
                             onChange={setOrientation}
                         />
@@ -132,7 +134,7 @@ export function MealPlansPage() {
                     className="ml-2 text-sm text-slate-400 hover:text-slate-600"
                     onClick={() => isWeek ? setAnchor(weekStart(new Date())) : setDayAnchor(new Date())}
                 >
-                    回到{isWeek ? '本周' : '今天'}
+                    {isWeek ? t('mealPlans.backToWeek') : t('mealPlans.backToToday')}
                 </button>
                 {/* 选中某plan时, 右侧显示删除(避免误触) */}
                 {activePlanId !== null && (
@@ -145,8 +147,8 @@ export function MealPlansPage() {
                 )}
             </div>
 
-            {loading && <State text="加载中…" />}
-            {error && <State text={`出错了: ${error}`} />}
+            {loading && <State text={t('common.loading')} />}
+            {error && <State text={t('common.errorPrefix', { msg: error })} />}
             {!loading && !error && (
                 isWeek ? (
                     <WeekView
@@ -253,13 +255,14 @@ function WeekView({ days, entries, orientation, onComplete, onDelete, onAdd }) {
 
 // ── 天视图: 按早/午/晚/加餐分 block ──
 const MEAL_SECTIONS = [
-    { type: 'breakfast', label: '早餐' },
-    { type: 'lunch', label: '午餐' },
-    { type: 'dinner', label: '晚餐' },
-    { type: 'snack', label: '加餐' },
+    { type: 'breakfast', labelKey: 'meal.breakfast' },
+    { type: 'lunch', labelKey: 'meal.lunch' },
+    { type: 'dinner', labelKey: 'meal.dinner' },
+    { type: 'snack', labelKey: 'meal.snack' },
 ]
 
 function DayView({ date, entries, onComplete, onDelete, onAdd }) {
+    const { t } = useTranslation()
     const iso = toISO(date)
     const dayEntries = entriesOf(entries, iso)
 
@@ -272,16 +275,16 @@ function DayView({ date, entries, onComplete, onDelete, onAdd }) {
                 return (
                     <div key={sec.type} className="rounded-xl border border-slate-200 bg-white p-4">
                         <div className="mb-3 flex items-center justify-between">
-                            <h3 className="font-semibold text-slate-800">{sec.label}</h3>
+                            <h3 className="font-semibold text-slate-800">{t(sec.labelKey)}</h3>
                             <button
                                 className="text-sm text-slate-400 hover:text-slate-700"
                                 onClick={() => onAdd(iso)}
                             >
-                                + 添加
+                                {t('mealPlans.add')}
                             </button>
                         </div>
                         {secEntries.length === 0 ? (
-                            <p className="py-2 text-center text-sm text-slate-300">还没安排</p>
+                            <p className="py-2 text-center text-sm text-slate-300">{t('mealPlans.noneScheduled')}</p>
                         ) : (
                             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 {secEntries.map((e) => (
@@ -298,6 +301,7 @@ function DayView({ date, entries, onComplete, onDelete, onAdd }) {
 
 // 一天的块(周竖版 + 天视图共用)
 function DayBlock({ date, dayEntries, big, onComplete, onDelete, onAdd }) {
+    const { t } = useTranslation()
     const iso = toISO(date)
     return (
         <div className={`rounded-xl border bg-white p-4 ${isToday(date) ? 'border-slate-900' : 'border-slate-200'
@@ -307,15 +311,15 @@ function DayBlock({ date, dayEntries, big, onComplete, onDelete, onAdd }) {
                     <span className="font-semibold text-slate-800">{weekdayLabel(date)}</span>
                     <span className="text-sm text-slate-400">{shortDate(date)}</span>
                     {isToday(date) && (
-                        <span className="rounded-full bg-slate-900 px-2 py-0.5 text-xs text-white">今天</span>
+                        <span className="rounded-full bg-slate-900 px-2 py-0.5 text-xs text-white">{t('mealPlans.today')}</span>
                     )}
                 </div>
                 <button className="text-sm text-slate-400 hover:text-slate-700" onClick={() => onAdd(iso)}>
-                    + 排餐
+                    {t('mealPlans.planMeal')}
                 </button>
             </div>
             {dayEntries.length === 0 ? (
-                <p className="py-2 text-center text-sm text-slate-300">这天还没安排</p>
+                <p className="py-2 text-center text-sm text-slate-300">{t('mealPlans.noneThisDay')}</p>
             ) : (
                 <div className={`grid grid-cols-1 gap-2 ${big ? 'sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'}`}>
                     {dayEntries.map((e) => (

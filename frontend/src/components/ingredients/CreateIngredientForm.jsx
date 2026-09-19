@@ -3,12 +3,14 @@
 // 作为视图嵌进现有弹窗(加库存 / 手动创建菜谱), 不是独立 Dialog(避免嵌套弹窗)。
 import { ArrowLeft } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 import { FOOD_UNITS, defaultBasisFor, unitLabel } from '@/lib/units'
 
 export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [name, setName] = useState(initialName)
     const [unit, setUnit] = useState('g')
@@ -26,8 +28,8 @@ export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) 
     }
 
     async function submit() {
-        if (!name.trim()) { setError('请填写名称'); return }
-        if (!basis || Number(basis) <= 0) { setError('基准量要大于 0'); return }
+        if (!name.trim()) { setError(t('ingredient.errName')); return }
+        if (!basis || Number(basis) <= 0) { setError(t('ingredient.errBasis')); return }
         try {
             setSubmitting(true)
             setError(null)
@@ -45,7 +47,7 @@ export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) 
             })
             onCreated?.(created)
         } catch (e) {
-            setError(e.message || '创建失败')
+            setError(e.message || t('recipes.errCreate'))
         } finally {
             setSubmitting(false)
         }
@@ -58,14 +60,14 @@ export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) 
                 className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"
                 onClick={onCancel}
             >
-                <ArrowLeft className="h-4 w-4" /> 返回
+                <ArrowLeft className="h-4 w-4" /> {t('common.back')}
             </button>
 
             <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">名称</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">{t('ingredient.name')}</label>
                 <input
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="如: 自制豆腐块"
+                    placeholder={t('ingredient.namePh')}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                 />
@@ -74,10 +76,10 @@ export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) 
             {/* 营养基准: 每 [basis] [unit] */}
             <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">
-                    营养信息(每 {basis || '?'} {unitLabel(unit)})
+                    {t('ingredient.nutritionPer', { basis: basis || '?', unit: unitLabel(unit) })}
                 </label>
                 <div className="mb-2 flex items-center gap-2 text-sm">
-                    <span className="text-slate-500">每</span>
+                    <span className="text-slate-500">{t('ingredient.per')}</span>
                     <input
                         type="number"
                         className="w-20 rounded-md border border-slate-300 px-2 py-1.5"
@@ -90,17 +92,17 @@ export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) 
                         onChange={(e) => changeUnit(e.target.value)}
                     >
                         {FOOD_UNITS.map((u) => (
-                            <option key={u.value} value={u.value}>{u.label}</option>
+                            <option key={u.value} value={u.value}>{unitLabel(u.value)}</option>
                         ))}
                     </select>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                    <NutInput label="热量 (kcal)" value={cal} onChange={setCal} />
-                    <NutInput label="蛋白 (g)" value={protein} onChange={setProtein} />
-                    <NutInput label="碳水 (g)" value={carbs} onChange={setCarbs} />
-                    <NutInput label="脂肪 (g)" value={fat} onChange={setFat} />
+                    <NutInput label={t('ingredient.calories')} value={cal} onChange={setCal} />
+                    <NutInput label={t('ingredient.protein')} value={protein} onChange={setProtein} />
+                    <NutInput label={t('ingredient.carbs')} value={carbs} onChange={setCarbs} />
+                    <NutInput label={t('ingredient.fat')} value={fat} onChange={setFat} />
                 </div>
-                <p className="mt-1 text-xs text-slate-400">营养可留空(未知),之后用它算餐食营养。</p>
+                <p className="mt-1 text-xs text-slate-400">{t('ingredient.hint')}</p>
             </div>
 
             {error && <p className="text-sm text-red-500">{error}</p>}
@@ -110,7 +112,7 @@ export function CreateIngredientForm({ initialName = '', onCreated, onCancel }) 
                 onClick={submit}
                 disabled={submitting}
             >
-                {submitting ? '创建中…' : '创建食物'}
+                {submitting ? t('recipes.creating') : t('ingredient.createFood')}
             </button>
         </div>
     )

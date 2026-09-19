@@ -1,30 +1,33 @@
 // src/pages/NutritionPage.jsx —— 营养目标(身体数据 → 算 TDEE 目标)
 import { Target } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { MacroCard } from '@/components/dashboard/MacroCard'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 
+// value 存后端, labelKey 显示
 const SEX = [
-    { value: 'male', label: '男' },
-    { value: 'female', label: '女' },
-    { value: 'other', label: '其他' },
+    { value: 'male', labelKey: 'nutrition.sexMale' },
+    { value: 'female', labelKey: 'nutrition.sexFemale' },
+    { value: 'other', labelKey: 'nutrition.sexOther' },
 ]
 const ACTIVITY = [
-    { value: 'sedentary', label: '久坐(几乎不运动)' },
-    { value: 'light', label: '轻度(每周1-3次)' },
-    { value: 'moderate', label: '中等(每周3-5次)' },
-    { value: 'active', label: '积极(每周6-7次)' },
-    { value: 'very_active', label: '高强度(体力劳动/运动员)' },
+    { value: 'sedentary', labelKey: 'nutrition.actSedentary' },
+    { value: 'light', labelKey: 'nutrition.actLight' },
+    { value: 'moderate', labelKey: 'nutrition.actModerate' },
+    { value: 'active', labelKey: 'nutrition.actActive' },
+    { value: 'very_active', labelKey: 'nutrition.actVeryActive' },
 ]
 const GOALS = [
-    { value: 'fat_loss', label: '减脂' },
-    { value: 'muscle_gain', label: '增肌' },
-    { value: 'maintenance', label: '维持' },
+    { value: 'fat_loss', labelKey: 'nutrition.goalFatLoss' },
+    { value: 'muscle_gain', labelKey: 'nutrition.goalMuscleGain' },
+    { value: 'maintenance', labelKey: 'nutrition.goalMaintenance' },
 ]
 
 export function NutritionPage() {
+    const { t } = useTranslation()
     const { call } = useApi()
     // 身体数据
     const [height, setHeight] = useState('')
@@ -56,7 +59,7 @@ export function NutritionPage() {
 
     async function computeGoal() {
         // 校验
-        if (!height || !weight || !age) { setError('请填写身高、体重、年龄'); return }
+        if (!height || !weight || !age) { setError(t('nutrition.errRequired')); return }
         try {
             setSaving(true)
             setError(null)
@@ -76,33 +79,35 @@ export function NutritionPage() {
             })
             setGoal(g)
         } catch (e) {
-            setError(e.message || '计算失败')
+            setError(e.message || t('nutrition.errCompute'))
         } finally {
             setSaving(false)
         }
     }
 
+    const goalKey = GOALS.find((g) => g.value === goal?.goal_type)?.labelKey
+
     return (
         <div className="mx-auto max-w-2xl">
             <div className="mb-6 flex items-center gap-2">
                 <Target className="h-6 w-6 text-slate-400" />
-                <h1 className="text-2xl font-bold text-slate-900">营养目标</h1>
+                <h1 className="text-2xl font-bold text-slate-900">{t('nutrition.title')}</h1>
             </div>
 
             {/* 已有目标显示 */}
             {!loading && goal && (
                 <div className="mb-6">
                     <h2 className="mb-3 font-semibold text-slate-800">
-                        当前目标 · {GOALS.find((g) => g.value === goal.goal_type)?.label || goal.goal_type}
+                        {t('nutrition.currentGoal')} · {goalKey ? t(goalKey) : goal.goal_type}
                     </h2>
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                        <MacroCard label="热量" unit="kcal"
+                        <MacroCard label={t('macro.calories')} unit="kcal"
                             macro={{ consumed: null, target: goal.daily_calories, percent: null }} />
-                        <MacroCard label="蛋白质" unit="g"
+                        <MacroCard label={t('macro.protein')} unit="g"
                             macro={{ consumed: null, target: goal.daily_protein_g, percent: null }} />
-                        <MacroCard label="碳水" unit="g"
+                        <MacroCard label={t('macro.carbs')} unit="g"
                             macro={{ consumed: null, target: goal.daily_carbs_g, percent: null }} />
-                        <MacroCard label="脂肪" unit="g"
+                        <MacroCard label={t('macro.fat')} unit="g"
                             macro={{ consumed: null, target: goal.daily_fat_g, percent: null }} />
                     </div>
                 </div>
@@ -111,38 +116,38 @@ export function NutritionPage() {
             {/* 身体数据表单 */}
             <div className="rounded-xl border border-slate-200 bg-white p-6">
                 <h2 className="mb-4 font-semibold text-slate-800">
-                    {goal ? '重新计算' : '填写身体数据'}
+                    {goal ? t('nutrition.recompute') : t('nutrition.enterMetrics')}
                 </h2>
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
-                        <Field label="身高 (cm)">
+                        <Field label={t('nutrition.height')}>
                             <input type="number" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={height}
                                 onChange={(e) => setHeight(e.target.value)} placeholder="170" />
                         </Field>
-                        <Field label="体重 (kg)">
+                        <Field label={t('nutrition.weight')}>
                             <input type="number" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={weight}
                                 onChange={(e) => setWeight(e.target.value)} placeholder="65" />
                         </Field>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
-                        <Field label="年龄">
+                        <Field label={t('nutrition.age')}>
                             <input type="number" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={age}
                                 onChange={(e) => setAge(e.target.value)} placeholder="25" />
                         </Field>
-                        <Field label="性别">
+                        <Field label={t('nutrition.sex')}>
                             <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={sex} onChange={(e) => setSex(e.target.value)}>
-                                {SEX.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                {SEX.map((o) => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
                             </select>
                         </Field>
                     </div>
-                    <Field label="活动量">
+                    <Field label={t('nutrition.activity')}>
                         <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={activity} onChange={(e) => setActivity(e.target.value)}>
-                            {ACTIVITY.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            {ACTIVITY.map((o) => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
                         </select>
                     </Field>
-                    <Field label="目标">
+                    <Field label={t('nutrition.goal')}>
                         <select className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={goalType} onChange={(e) => setGoalType(e.target.value)}>
-                            {GOALS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            {GOALS.map((o) => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
                         </select>
                     </Field>
 
@@ -153,13 +158,13 @@ export function NutritionPage() {
                         onClick={computeGoal}
                         disabled={saving}
                     >
-                        {saving ? '计算中…' : '计算并保存目标'}
+                        {saving ? t('nutrition.computing') : t('nutrition.computeSave')}
                     </button>
                 </div>
             </div>
 
             <p className="mt-4 text-center text-xs text-slate-400">
-                采用 Mifflin-St Jeor 公式计算基础代谢,结合活动量与目标得出每日营养目标。
+                {t('nutrition.formulaNote')}
             </p>
         </div>
     )

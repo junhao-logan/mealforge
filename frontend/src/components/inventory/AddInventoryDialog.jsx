@@ -5,6 +5,7 @@
 //   视图3 填详情(数量 + 单位[按 allowed_units] + 过期日 + 储存区域)→ POST /inventory
 import { Plus, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { CreateIngredientForm } from '@/components/ingredients/CreateIngredientForm'
 import {
@@ -15,10 +16,11 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { api } from '@/lib/api'
 import { unitLabel } from '@/lib/units'
 
+// 储存区: value 存后端, labelKey 显示
 const ZONES = [
-    { value: 'pantry', label: '常温' },
-    { value: 'fridge', label: '冷藏' },
-    { value: 'freezer', label: '冷冻' },
+    { value: 'pantry', labelKey: 'inventory.zonePantry' },
+    { value: 'fridge', labelKey: 'inventory.zoneFridge' },
+    { value: 'freezer', labelKey: 'inventory.zoneFreezer' },
 ]
 
 // 数字去掉多余小数(220.0 → 220, 1.00 → 1)
@@ -29,6 +31,7 @@ function fmtNum(v) {
 }
 
 export function AddInventoryDialog({ onAdded }) {
+    const { t } = useTranslation()
     const [open, setOpen] = useState(false)
     const [step, setStep] = useState('select')     // 'select' | 'create' | 'detail'
     const [chosen, setChosen] = useState(null)
@@ -39,8 +42,8 @@ export function AddInventoryDialog({ onAdded }) {
         setTimeout(() => { setStep('select'); setChosen(null); setPendingName('') }, 200)
     }
 
-    const title = step === 'select' ? '选择食材'
-        : step === 'create' ? '创建食物' : '添加详情'
+    const title = step === 'select' ? t('inventory.selectFood')
+        : step === 'create' ? t('ingredient.createFood') : t('inventory.addDetail')
 
     return (
         <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
@@ -50,7 +53,7 @@ export function AddInventoryDialog({ onAdded }) {
                     tabIndex={0}
                     className="inline-flex cursor-pointer rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
                 >
-                    + 加库存
+                    {t('inventory.addStock')}
                 </span>
             </DialogTrigger>
             <DialogContent>
@@ -85,6 +88,7 @@ export function AddInventoryDialog({ onAdded }) {
 
 // ── 视图1: 选食材(tab + 排序 + 搜索 + 创建) ──
 function SelectIngredientView({ onPick, onCreateNew }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [tab, setTab] = useState('all')          // 'all'(全部食物) | 'mine'(我的食物)
     const [sort, setSort] = useState('recent')     // 'recent'(最近添加) | 'name'(字母)
@@ -119,8 +123,8 @@ function SelectIngredientView({ onPick, onCreateNew }) {
         <div className="space-y-3">
             {/* tab */}
             <div className="flex gap-1 border-b border-slate-200">
-                <TabBtn active={tab === 'all'} onClick={() => setTab('all')}>全部食物</TabBtn>
-                <TabBtn active={tab === 'mine'} onClick={() => setTab('mine')}>我的食物</TabBtn>
+                <TabBtn active={tab === 'all'} onClick={() => setTab('all')}>{t('inventory.tabAll')}</TabBtn>
+                <TabBtn active={tab === 'mine'} onClick={() => setTab('mine')}>{t('inventory.tabMine')}</TabBtn>
             </div>
 
             {/* 搜索 + 排序 */}
@@ -129,15 +133,15 @@ function SelectIngredientView({ onPick, onCreateNew }) {
                 <input
                     autoFocus
                     className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm"
-                    placeholder="搜索食材…"
+                    placeholder={t('recipes.searchPh')}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                 />
             </div>
             <div className="flex items-center gap-2 text-xs">
-                <span className="text-slate-400">排序</span>
-                <SortBtn active={sort === 'recent'} onClick={() => setSort('recent')}>最近添加</SortBtn>
-                <SortBtn active={sort === 'name'} onClick={() => setSort('name')}>字母</SortBtn>
+                <span className="text-slate-400">{t('inventory.sort')}</span>
+                <SortBtn active={sort === 'recent'} onClick={() => setSort('recent')}>{t('inventory.sortRecent')}</SortBtn>
+                <SortBtn active={sort === 'name'} onClick={() => setSort('name')}>{t('inventory.sortName')}</SortBtn>
             </div>
 
             {/* 常驻: 创建新食物(始终在最上, 不必先搜不到) */}
@@ -145,12 +149,12 @@ function SelectIngredientView({ onPick, onCreateNew }) {
                 className="flex w-full items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
                 onClick={() => onCreateNew(query.trim())}
             >
-                <Plus className="h-4 w-4" /> 创建新食物
+                <Plus className="h-4 w-4" /> {t('inventory.createNewFood')}
             </button>
 
             {/* 结果列表 */}
             <div className="max-h-72 space-y-1 overflow-y-auto">
-                {loading && <p className="py-4 text-center text-sm text-slate-400">加载中…</p>}
+                {loading && <p className="py-4 text-center text-sm text-slate-400">{t('common.loading')}</p>}
 
                 {!loading && results.map((ing) => (
                     <button
@@ -162,12 +166,16 @@ function SelectIngredientView({ onPick, onCreateNew }) {
                             <div className="flex items-center gap-1.5 text-sm text-slate-800">
                                 {ing.name}
                                 {ing.visibility === 'private' && (
-                                    <span className="text-xs text-slate-400">私人</span>
+                                    <span className="text-xs text-slate-400">{t('recipes.private')}</span>
                                 )}
                             </div>
                             {ing.per_100g_calories !== null && ing.per_100g_calories !== undefined && (
                                 <div className="mt-0.5 text-xs text-slate-400">
-                                    {fmtNum(ing.per_100g_calories)} 千卡 / {fmtNum(ing.nutrition_basis_amount)} {unitLabel(ing.nutrition_basis_unit)}
+                                    {t('inventory.nutritionPreview', {
+                                        cal: fmtNum(ing.per_100g_calories),
+                                        basis: fmtNum(ing.nutrition_basis_amount),
+                                        unit: unitLabel(ing.nutrition_basis_unit),
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -177,13 +185,13 @@ function SelectIngredientView({ onPick, onCreateNew }) {
 
                 {noResult && (
                     <p className="py-4 text-center text-sm text-slate-400">
-                        没搜到 "{debounced}",可点上方"创建新食物"
+                        {t('inventory.noSearchHint', { query: debounced })}
                     </p>
                 )}
 
                 {!loading && results.length === 0 && !debounced && (
                     <p className="py-6 text-center text-sm text-slate-400">
-                        {tab === 'mine' ? '还没有自己创建的食材' : '暂无食材'}
+                        {tab === 'mine' ? t('inventory.emptyMine') : t('inventory.emptyAll')}
                     </p>
                 )}
             </div>
@@ -221,6 +229,7 @@ function SortBtn({ active, onClick, children }) {
 
 // ── 视图3: 填详情 ──
 function FillDetailView({ ingredient, onBack, onDone }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const units = (ingredient.allowed_units && ingredient.allowed_units.length > 0)
         ? ingredient.allowed_units
@@ -233,7 +242,7 @@ function FillDetailView({ ingredient, onBack, onDone }) {
     const [error, setError] = useState(null)
 
     async function submit() {
-        if (!amount || Number(amount) <= 0) { setError('请填写有效数量'); return }
+        if (!amount || Number(amount) <= 0) { setError(t('inventory.errAmount')); return }
         try {
             setSubmitting(true)
             setError(null)
@@ -248,7 +257,7 @@ function FillDetailView({ ingredient, onBack, onDone }) {
             })
             onDone()
         } catch (e) {
-            setError(e.message || '添加失败')
+            setError(e.message || t('inventory.errAdd'))
         } finally {
             setSubmitting(false)
         }
@@ -264,12 +273,12 @@ function FillDetailView({ ingredient, onBack, onDone }) {
             </button>
 
             <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">数量</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.quantity')}</label>
                 <div className="flex items-center gap-2">
                     <input
                         type="number" autoFocus
                         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                        placeholder="例如 500"
+                        placeholder={t('inventory.quantityPh')}
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
                     />
@@ -292,7 +301,7 @@ function FillDetailView({ ingredient, onBack, onDone }) {
             </div>
 
             <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">过期日期(可选)</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.expiryOptional')}</label>
                 <input
                     type="date"
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -302,14 +311,14 @@ function FillDetailView({ ingredient, onBack, onDone }) {
             </div>
 
             <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">储存区域</label>
+                <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.storageZone')}</label>
                 <select
                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
                 >
                     {ZONES.map((z) => (
-                        <option key={z.value} value={z.value}>{z.label}</option>
+                        <option key={z.value} value={z.value}>{t(z.labelKey)}</option>
                     ))}
                 </select>
             </div>
@@ -321,7 +330,7 @@ function FillDetailView({ ingredient, onBack, onDone }) {
                 onClick={submit}
                 disabled={submitting}
             >
-                {submitting ? '添加中…' : '确认添加'}
+                {submitting ? t('inventory.adding') : t('inventory.confirmAdd')}
             </button>
         </div>
     )

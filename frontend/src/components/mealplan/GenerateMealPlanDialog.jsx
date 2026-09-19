@@ -2,6 +2,7 @@
 // AI 生成周计划: 填 天数/餐段/偏好 → POST /meal-plans/generate → AI 从已有菜谱排布
 import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
@@ -9,13 +10,15 @@ import {
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 
+// 餐段: value 存后端, labelKey 显示
 const MEAL_OPTIONS = [
-    { value: 'breakfast', label: '早餐' },
-    { value: 'lunch', label: '午餐' },
-    { value: 'dinner', label: '晚餐' },
+    { value: 'breakfast', labelKey: 'meal.breakfast' },
+    { value: 'lunch', labelKey: 'meal.lunch' },
+    { value: 'dinner', labelKey: 'meal.dinner' },
 ]
 
 export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [open, setOpen] = useState(false)
     const [submitting, setSubmitting] = useState(false)
@@ -38,7 +41,7 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
     }
 
     async function generate() {
-        if (meals.length === 0) { setError('至少选一个餐段'); return }
+        if (meals.length === 0) { setError(t('mealPlans.errPickMeal')); return }
         try {
             setSubmitting(true)
             setError(null)
@@ -52,11 +55,11 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
             onGenerated?.()
         } catch (e) {
             if (e.status === 400) {
-                setError('没有可用菜谱,先去菜谱页创建或 AI 生成几道菜')
+                setError(t('mealPlans.errNoRecipes'))
             } else if (e.status === 502) {
-                setError('AI 生成暂时不可用,请稍后重试')
+                setError(t('recipes.errAiDown'))
             } else {
-                setError(e.message || '生成失败')
+                setError(e.message || t('recipes.errGenerate'))
             }
         } finally {
             setSubmitting(false)
@@ -72,25 +75,25 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                     className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
                 >
                     <Sparkles className="h-4 w-4" />
-                    AI 生成周计划
+                    {t('mealPlans.aiPlan')}
                 </span>
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Sparkles className="h-5 w-5 text-amber-500" />
-                        AI 生成周计划
+                        {t('mealPlans.aiPlan')}
                     </DialogTitle>
                 </DialogHeader>
 
                 <div className="space-y-4">
                     <p className="text-sm text-slate-500">
-                        AI 会从你已有的菜谱里挑选,排布这几天的餐。
+                        {t('mealPlans.aiDesc')}
                     </p>
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">天数</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.days')}</label>
                             <input
                                 type="number" min="1" max="14"
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -99,7 +102,7 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                             />
                         </div>
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">起始日期</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.startDate')}</label>
                             <input
                                 type="date"
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -110,7 +113,7 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                     </div>
 
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">餐段</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.mealSlot')}</label>
                         <div className="flex gap-2">
                             {MEAL_OPTIONS.map((m) => (
                                 <button
@@ -121,17 +124,17 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                                         }`}
                                     onClick={() => toggleMeal(m.value)}
                                 >
-                                    {m.label}
+                                    {t(m.labelKey)}
                                 </button>
                             ))}
                         </div>
                     </div>
 
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">补充说明(可选)</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.notesOptional')}</label>
                         <input
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                            placeholder="例如: 清淡、多样化"
+                            placeholder={t('mealPlans.notesPh')}
                             value={freeText}
                             onChange={(e) => setFreeText(e.target.value)}
                         />
@@ -145,9 +148,9 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                         disabled={submitting}
                     >
                         {submitting ? (
-                            <><Sparkles className="h-4 w-4 animate-pulse" /> AI 排布中…(约需几秒)</>
+                            <><Sparkles className="h-4 w-4 animate-pulse" /> {t('mealPlans.generating')}</>
                         ) : (
-                            <><Sparkles className="h-4 w-4" /> 开始生成</>
+                            <><Sparkles className="h-4 w-4" /> {t('recipes.generateStart')}</>
                         )}
                     </button>
                 </div>

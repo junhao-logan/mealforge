@@ -1,6 +1,12 @@
 // src/lib/dateRange.js
 // 日期范围工具 —— 各视图(周/天/月)共用。扩展点: 加视图时复用这些。
 // 周一为一周起点。
+import i18n from '@/i18n'
+
+// 当前界面语言 → Intl locale(用于星期/完整日期本地化显示)
+function localeTag() {
+    return (i18n.language || 'en').startsWith('zh') ? 'zh-CN' : 'en-US'
+}
 
 export function toISO(d) {
     const y = d.getFullYear()
@@ -34,9 +40,9 @@ export function addDays(date, n) {
     return d
 }
 
-const WEEKDAY_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+// 星期显示: 按当前语言(en: Mon / zh: 周一)。切换语言时组件重渲染即更新。
 export function weekdayLabel(d) {
-    return WEEKDAY_CN[d.getDay()]
+    return d.toLocaleDateString(localeTag(), { weekday: 'short' })
 }
 
 // 显示用: "8/11"
@@ -51,8 +57,9 @@ export function isToday(d) {
         d.getMonth() === t.getMonth() && d.getDate() === t.getDate()
 }
 
-// 完整日期显示: "2026年8月12日 周三"
-const WEEKDAY_FULL = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+// 完整日期显示: 按当前语言(en: "Thursday, September 18, 2026" / zh: "2026年9月18日星期四")
 export function fullDate(d) {
-    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAY_FULL[d.getDay()]}`
+    return d.toLocaleDateString(localeTag(), {
+        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    })
 }

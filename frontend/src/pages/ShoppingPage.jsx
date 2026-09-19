@@ -1,6 +1,7 @@
 // src/pages/ShoppingPage.jsx —— 采购(清单管理 + 缺口预览带加入清单)
 import { AlertTriangle, Check, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -12,6 +13,7 @@ import { api } from '@/lib/api'
 import { toISO } from '@/lib/dateRange'
 
 export function ShoppingPage() {
+    const { t } = useTranslation()
     const [tab, setTab] = useState('lists')   // 默认清单页
     const [ingredients, setIngredients] = useState({})
     const { call } = useApi()
@@ -32,14 +34,14 @@ export function ShoppingPage() {
 
     return (
         <div>
-            <h1 className="mb-6 text-2xl font-bold text-slate-900">采购</h1>
+            <h1 className="mb-6 text-2xl font-bold text-slate-900">{t('shopping.title')}</h1>
 
             <div className="mb-4 flex gap-1 border-b border-slate-200">
                 <TabButton active={tab === 'lists'} onClick={() => setTab('lists')}>
-                    采购清单
+                    {t('shopping.tabLists')}
                 </TabButton>
                 <TabButton active={tab === 'preview'} onClick={() => setTab('preview')}>
-                    缺口预览
+                    {t('shopping.tabPreview')}
                 </TabButton>
             </div>
 
@@ -65,6 +67,7 @@ function TabButton({ active, onClick, children }) {
 
 // ═══ 采购清单(第一页) ═══
 function ShoppingLists({ ingredients }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [lists, setLists] = useState([])
     const [activeId, setActiveId] = useState(null)
@@ -84,11 +87,11 @@ function ShoppingLists({ ingredients }) {
             // 默认选第一个
             if (data?.length > 0 && activeId === null) setActiveId(data[0].id)
         } catch (e) {
-            setError(e.message || '加载失败')
+            setError(e.message || t('common.loadFailed'))
         } finally {
             setLoading(false)
         }
-    }, [call, activeId])
+    }, [call, activeId, t])
 
     const loadDetail = useCallback(async (id) => {
         if (!id) { setDetail(null); return }
@@ -96,9 +99,9 @@ function ShoppingLists({ ingredients }) {
             const d = await call(api.get, `/shopping-lists/${id}`)
             setDetail(d)
         } catch (e) {
-            setError(e.message || '加载清单失败')
+            setError(e.message || t('shopping.errLoadList'))
         }
-    }, [call])
+    }, [call, t])
 
     useEffect(() => { loadLists() }, [loadLists])
     useEffect(() => { loadDetail(activeId) }, [activeId, loadDetail])
@@ -115,7 +118,7 @@ function ShoppingLists({ ingredients }) {
             await loadLists()
             setActiveId(created.id)
         } catch (e) {
-            alert(e.message || '生成失败')
+            alert(e.message || t('shopping.errGenerate'))
         } finally {
             setGenerating(false)
         }
@@ -127,23 +130,23 @@ function ShoppingLists({ ingredients }) {
             await call(api.post, `/shopping-lists/${activeId}/regenerate`)
             await loadDetail(activeId)
         } catch (e) {
-            alert(e.message || '重算失败')
+            alert(e.message || t('shopping.errRegenerate'))
         }
     }
 
     async function deleteList() {
-        if (!activeId || !confirm('删除这个采购清单?')) return
+        if (!activeId || !confirm(t('shopping.confirmDeleteList'))) return
         try {
             await call(api.del, `/shopping-lists/${activeId}`)
             setActiveId(null)
             await loadLists()
         } catch (e) {
-            alert(e.message || '删除失败')
+            alert(e.message || t('common.deleteFailed'))
         }
     }
 
-    if (loading) return <State text="加载中…" />
-    if (error) return <State text={`出错了: ${error}`} />
+    if (loading) return <State text={t('common.loading')} />
+    if (error) return <State text={t('common.errorPrefix', { msg: error })} />
 
     return (
         <div>
@@ -157,7 +160,7 @@ function ShoppingLists({ ingredients }) {
                             }`}
                         onClick={() => setActiveId(l.id)}
                     >
-                        {l.name || `清单 ${l.forecast_start || ''}`}
+                        {l.name || t('shopping.listFallback', { date: l.forecast_start || '' })}
                     </button>
                 ))}
                 <button
@@ -166,12 +169,12 @@ function ShoppingLists({ ingredients }) {
                     disabled={generating}
                 >
                     <Plus className="h-3.5 w-3.5" />
-                    {generating ? '生成中…' : '生成清单(未来7天)'}
+                    {generating ? t('shopping.generating') : t('shopping.generateList')}
                 </button>
             </div>
 
             {lists.length === 0 && (
-                <State text="还没有采购清单。点「生成清单」按未来7天缺口自动生成" />
+                <State text={t('shopping.noLists')} />
             )}
 
             {/* 清单详情 */}
@@ -179,26 +182,30 @@ function ShoppingLists({ ingredients }) {
                 <div>
                     <div className="mb-3 flex items-center justify-between">
                         <div className="text-sm text-slate-500">
-                            {detail.forecast_start} ~ {detail.forecast_end} · {detail.items.length} 项
+                            {t('shopping.rangeCount', {
+                                start: detail.forecast_start,
+                                end: detail.forecast_end,
+                                count: detail.items.length,
+                            })}
                         </div>
                         <div className="flex gap-2">
                             <button
                                 className="flex items-center gap-1 rounded-md border border-slate-200 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
                                 onClick={regenerate}
                             >
-                                <RefreshCw className="h-3.5 w-3.5" /> 重算缺口
+                                <RefreshCw className="h-3.5 w-3.5" /> {t('shopping.regenerate')}
                             </button>
                             <button
                                 className="flex items-center gap-1 rounded-md border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
                                 onClick={deleteList}
                             >
-                                <Trash2 className="h-3.5 w-3.5" /> 删除清单
+                                <Trash2 className="h-3.5 w-3.5" /> {t('shopping.deleteList')}
                             </button>
                         </div>
                     </div>
 
                     {detail.items.length === 0 ? (
-                        <State text="这个清单没有条目(库存充足或窗口无排餐)" />
+                        <State text={t('shopping.listEmpty')} />
                     ) : (
                         <>
                             <div className="space-y-2">
@@ -229,7 +236,7 @@ function ShoppingLists({ ingredients }) {
                                     className="mt-4 w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
                                     onClick={() => setShowCheckout(true)}
                                 >
-                                    结算 ({selectedCount(detail, checkout)} 项) →
+                                    {t('shopping.checkout', { count: selectedCount(detail, checkout) })}
                                 </button>
                             )}
                         </>
@@ -242,7 +249,7 @@ function ShoppingLists({ ingredients }) {
                 <CheckoutDialog
                     open={showCheckout}
                     listId={activeId}
-                    checkoutItems={buildCheckoutItems(detail, checkout, ingredients)}
+                    checkoutItems={buildCheckoutItems(detail, checkout, ingredients, t)}
                     onClose={() => setShowCheckout(false)}
                     onDone={() => { setCheckout({}); loadDetail(activeId) }}
                 />
@@ -253,15 +260,16 @@ function ShoppingLists({ ingredients }) {
 
 // 清单一行: 勾选 + 输入实际购买量(已购的显示状态)
 function ShoppingItemRow({ item, name, state, onToggle, onAmount }) {
+    const { t } = useTranslation()
     if (item.is_purchased) {
         return (
             <Card className="flex items-center justify-between border-green-200 bg-green-50 p-3">
                 <div className="flex items-center gap-3">
                     <Check className="h-5 w-5 text-green-600" />
-                    <span className="font-medium text-slate-900">{name || '未命名'}</span>
+                    <span className="font-medium text-slate-900">{name || t('mealPlans.unnamed')}</span>
                 </div>
                 <span className="text-sm text-green-600">
-                    已买 {item.purchased_grams ? `${Number(item.purchased_grams).toFixed(0)}g` : ''}
+                    {item.purchased_grams ? t('shopping.bought', { grams: Number(item.purchased_grams).toFixed(0) }) : ''}
                 </span>
             </Card>
         )
@@ -276,9 +284,9 @@ function ShoppingItemRow({ item, name, state, onToggle, onAmount }) {
                     checked={checked}
                     onChange={(e) => onToggle(e.target.checked)}
                 />
-                <span className="font-medium text-slate-900">{name || '未命名'}</span>
+                <span className="font-medium text-slate-900">{name || t('mealPlans.unnamed')}</span>
                 {item.needed_grams && (
-                    <span className="text-sm text-slate-400">需 {Number(item.needed_grams).toFixed(0)}g</span>
+                    <span className="text-sm text-slate-400">{t('shopping.need', { grams: Number(item.needed_grams).toFixed(0) })}</span>
                 )}
             </label>
             {/* 勾选后可填实际买入量 */}
@@ -287,7 +295,7 @@ function ShoppingItemRow({ item, name, state, onToggle, onAmount }) {
                     <input
                         type="number"
                         className="w-24 rounded-md border border-slate-300 px-2 py-1 text-sm"
-                        placeholder="买入量"
+                        placeholder={t('shopping.buyAmountPh')}
                         value={state?.amount ?? ''}
                         onChange={(e) => onAmount(e.target.value)}
                     />
@@ -306,18 +314,19 @@ function selectedCount(detail, checkout) {
 }
 
 // 组织结算数据
-function buildCheckoutItems(detail, checkout, ingredients) {
+function buildCheckoutItems(detail, checkout, ingredients, t) {
     return detail.items
         .filter((it) => !it.is_purchased && checkout[it.id]?.checked && Number(checkout[it.id]?.amount) > 0)
         .map((it) => ({
             item: it,
-            name: ingredients[it.ingredient_id] || it.item_name || '未命名',
+            name: ingredients[it.ingredient_id] || it.item_name || t('mealPlans.unnamed'),
             amount: checkout[it.id].amount,
         }))
 }
 
 // ═══ 缺口预览(第二页)带加入清单 ═══
 function ShortfallPreview({ ingredients }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [items, setItems] = useState([])
     const [lists, setLists] = useState([])
@@ -335,27 +344,27 @@ function ShortfallPreview({ ingredients }) {
             setItems(preview || [])
             setLists(listData || [])
         } catch (e) {
-            setError(e.message || '加载失败')
+            setError(e.message || t('common.loadFailed'))
         } finally {
             setLoading(false)
         }
-    }, [call])
+    }, [call, t])
 
     useEffect(() => { reload() }, [reload])
 
-    if (loading) return <State text="分析未来7天缺口…" />
-    if (error) return <State text={`出错了: ${error}`} />
+    if (loading) return <State text={t('shopping.analyzing')} />
+    if (error) return <State text={t('common.errorPrefix', { msg: error })} />
 
     const shortItems = items.filter((it) => Number(it.projected_remaining_grams) < 0)
     const okItems = items.filter((it) => Number(it.projected_remaining_grams) >= 0)
 
     if (items.length === 0) {
-        return <State text="未来7天没有排餐,无需采购。先去餐计划排餐" />
+        return <State text={t('shopping.noMeals')} />
     }
 
     return (
         <div className="space-y-6">
-            <p className="text-sm text-slate-500">按未来 7 天已排的餐,对比当前库存,预计会缺这些:</p>
+            <p className="text-sm text-slate-500">{t('shopping.previewDesc')}</p>
 
             {shortItems.length > 0 ? (
                 <div className="space-y-2">
@@ -369,20 +378,20 @@ function ShortfallPreview({ ingredients }) {
                                 <div className="flex items-center gap-2">
                                     <AlertTriangle className="h-4 w-4 text-amber-500" />
                                     <span className="font-medium text-slate-900">
-                                        {ingredients[it.ingredient_id] || `食材 #${it.ingredient_id}`}
+                                        {ingredients[it.ingredient_id] || t('inventory.food', { id: it.ingredient_id })}
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-3">
                                     <span className="text-sm text-slate-600">
-                                        有 {Number(it.actual_grams).toFixed(0)}g · 需{' '}
-                                        {Number(it.demand_grams).toFixed(0)}g ·{' '}
-                                        <span className="font-semibold text-amber-700">缺 {short.toFixed(0)}g</span>
+                                        {t('shopping.have', { grams: Number(it.actual_grams).toFixed(0) })} ·{' '}
+                                        {t('shopping.needAmt', { grams: Number(it.demand_grams).toFixed(0) })} ·{' '}
+                                        <span className="font-semibold text-amber-700">{t('shopping.shortAmt', { grams: short.toFixed(0) })}</span>
                                     </span>
                                     <button
                                         className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-white"
                                         onClick={() => setAddTarget({ ...it, shortGrams: short })}
                                     >
-                                        加入清单
+                                        {t('shopping.addToList')}
                                     </button>
                                 </div>
                             </Card>
@@ -391,18 +400,18 @@ function ShortfallPreview({ ingredients }) {
                 </div>
             ) : (
                 <Card className="flex items-center gap-2 border-green-200 bg-green-50 p-4 text-sm text-green-700">
-                    <Check className="h-4 w-4" /> 库存充足,未来 7 天的餐都能做,无需采购
+                    <Check className="h-4 w-4" /> {t('shopping.enoughStock')}
                 </Card>
             )}
 
             {okItems.length > 0 && (
                 <details className="text-sm text-slate-500">
-                    <summary className="cursor-pointer">库存充足的 {okItems.length} 样</summary>
+                    <summary className="cursor-pointer">{t('shopping.enoughCount', { count: okItems.length })}</summary>
                     <div className="mt-2 space-y-1">
                         {okItems.map((it) => (
                             <div key={it.ingredient_id} className="flex justify-between px-1">
-                                <span>{ingredients[it.ingredient_id] || `食材 #${it.ingredient_id}`}</span>
-                                <span className="text-slate-400">剩 {Number(it.projected_remaining_grams).toFixed(0)}g</span>
+                                <span>{ingredients[it.ingredient_id] || t('inventory.food', { id: it.ingredient_id })}</span>
+                                <span className="text-slate-400">{t('shopping.remaining', { grams: Number(it.projected_remaining_grams).toFixed(0) })}</span>
                             </div>
                         ))}
                     </div>
@@ -423,6 +432,7 @@ function ShortfallPreview({ ingredients }) {
 
 // 缺口项加入清单(可调量)
 function AddToListDialog({ target, lists, name, onClose, onAdded }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [listId, setListId] = useState('')
     const [amount, setAmount] = useState('')
@@ -438,8 +448,8 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
     }, [target, lists])
 
     async function submit() {
-        if (!listId) { setError('请先选或生成一个清单'); return }
-        if (!amount || Number(amount) <= 0) { setError('请填写数量'); return }
+        if (!listId) { setError(t('shopping.errPickList')); return }
+        if (!amount || Number(amount) <= 0) { setError(t('inventory.errAmount')); return }
         try {
             setSubmitting(true)
             setError(null)
@@ -453,7 +463,7 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
             onAdded?.()
             onClose?.()
         } catch (e) {
-            setError(e.message || '加入失败')
+            setError(e.message || t('shopping.errAdd'))
         } finally {
             setSubmitting(false)
         }
@@ -463,17 +473,17 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
         <Dialog open={target !== null} onOpenChange={(o) => { if (!o) onClose?.() }}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>加入采购清单 · {name}</DialogTitle>
+                    <DialogTitle>{t('shopping.addToListTitle', { name })}</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                     {lists.length === 0 ? (
                         <p className="text-sm text-amber-600">
-                            还没有采购清单,请先去「采购清单」页生成一个。
+                            {t('shopping.noListsHint')}
                         </p>
                     ) : (
                         <>
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">加入清单</label>
+                                <label className="mb-1 block text-sm font-medium text-slate-700">{t('shopping.addToList')}</label>
                                 <select
                                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                                     value={listId}
@@ -481,13 +491,13 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
                                 >
                                     {lists.map((l) => (
                                         <option key={l.id} value={l.id}>
-                                            {l.name || `清单 ${l.forecast_start || ''}`}
+                                            {l.name || t('shopping.listFallback', { date: l.forecast_start || '' })}
                                         </option>
                                     ))}
                                 </select>
                             </div>
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">数量 (克)</label>
+                                <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.quantityGrams')}</label>
                                 <input
                                     type="number" autoFocus
                                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -501,7 +511,7 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
                                 onClick={submit}
                                 disabled={submitting}
                             >
-                                {submitting ? '添加中…' : '加入清单'}
+                                {submitting ? t('inventory.adding') : t('shopping.addToList')}
                             </button>
                         </>
                     )}

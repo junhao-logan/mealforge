@@ -1,6 +1,7 @@
 // src/components/shopping/CheckoutDialog.jsx
 // 结算: 列出勾选买的项, 每样分配储存区(默认冷藏), 一次性逐个 purchase 回流。
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -8,15 +9,17 @@ import {
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 
+// 储存区: value 存后端, labelKey 显示
 const ZONES = [
-    { value: 'fridge', label: '冷藏' },
-    { value: 'pantry', label: '常温' },
-    { value: 'freezer', label: '冷冻' },
-    { value: '', label: '未指定' },
+    { value: 'fridge', labelKey: 'inventory.zoneFridge' },
+    { value: 'pantry', labelKey: 'inventory.zonePantry' },
+    { value: 'freezer', labelKey: 'inventory.zoneFreezer' },
+    { value: '', labelKey: 'inventory.zoneUnspecified' },
 ]
 
 // checkoutItems: [{ item, name, amount }] —— 勾选且填了量的
 export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [locations, setLocations] = useState({})   // itemId → location
     const [expires, setExpires] = useState({})       // itemId → expires_at(可选)
@@ -53,7 +56,7 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
             onDone?.()
             onClose?.()
         } catch (e) {
-            setError(e.message || '结算失败(部分可能已处理)')
+            setError(e.message || t('shopping.errCheckout'))
         } finally {
             setSubmitting(false)
         }
@@ -63,11 +66,11 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
         <Dialog open={open} onOpenChange={(o) => { if (!o) onClose?.() }}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>结算 · 分配储存区</DialogTitle>
+                    <DialogTitle>{t('shopping.checkoutTitle')}</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                     <p className="text-sm text-slate-500">
-                        这些将回流入库,请为每样选择储存区(默认冷藏):
+                        {t('shopping.checkoutDesc')}
                     </p>
                     <div className="max-h-80 space-y-2 overflow-y-auto">
                         {checkoutItems.map(({ item, name, amount }) => (
@@ -83,13 +86,13 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
                                         onChange={(e) => setLoc(item.id, e.target.value)}
                                     >
                                         {ZONES.map((z) => (
-                                            <option key={z.value} value={z.value}>{z.label}</option>
+                                            <option key={z.value} value={z.value}>{t(z.labelKey)}</option>
                                         ))}
                                     </select>
                                 </div>
                                 {/* 过期日(可选, 默认无, 可之后在库存页补) */}
                                 <div className="mt-2 flex items-center gap-2">
-                                    <span className="text-xs text-slate-400">过期日(可选)</span>
+                                    <span className="text-xs text-slate-400">{t('inventory.expiryOptional')}</span>
                                     <input
                                         type="date"
                                         className="rounded-md border border-slate-300 px-2 py-1 text-sm"
@@ -106,7 +109,7 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
                         onClick={checkout}
                         disabled={submitting}
                     >
-                        {submitting ? '结算中…' : `确认结算 (${checkoutItems.length} 项)`}
+                        {submitting ? t('shopping.checkingOut') : t('shopping.confirmCheckout', { count: checkoutItems.length })}
                     </button>
                 </div>
             </DialogContent>

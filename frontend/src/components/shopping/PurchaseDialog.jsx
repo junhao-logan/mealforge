@@ -1,6 +1,7 @@
 // src/components/shopping/PurchaseDialog.jsx
 // 打勾购买: 入库项填实际购买量 → PATCH purchase(回流库存 I9)
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -9,6 +10,7 @@ import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 
 export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurchased }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     // 默认填 needed_grams(缺多少买多少)
     const [amount, setAmount] = useState('')
@@ -22,7 +24,7 @@ export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurcha
         const amt = amount || defaultAmount
         // 入库项必填量
         if (item?.add_to_inventory && (!amt || Number(amt) <= 0)) {
-            setError('入库项需填实际购买量')
+            setError(t('shopping.errPurchaseAmount'))
             return
         }
         try {
@@ -37,7 +39,7 @@ export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurcha
             onPurchased?.()
             onClose?.()
         } catch (e) {
-            setError(e.message || '标记购买失败')
+            setError(e.message || t('shopping.errPurchase'))
         } finally {
             setSubmitting(false)
         }
@@ -47,27 +49,27 @@ export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurcha
         <Dialog open={open} onOpenChange={(o) => { if (!o) onClose?.() }}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>标记已买 · {itemName}</DialogTitle>
+                    <DialogTitle>{t('shopping.purchaseTitle', { name: itemName })}</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                     {item?.add_to_inventory ? (
                         <div>
                             <label className="mb-1 block text-sm font-medium text-slate-700">
-                                实际购买量 (克)
+                                {t('shopping.actualAmount')}
                             </label>
                             <input
                                 type="number" autoFocus
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                placeholder={defaultAmount || '例如 500'}
+                                placeholder={defaultAmount || t('inventory.quantityPh')}
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
                             />
                             <p className="mt-1 text-xs text-slate-400">
-                                购买后会自动回流到库存(建一个新批次)。
+                                {t('shopping.purchaseHint')}
                             </p>
                         </div>
                     ) : (
-                        <p className="text-sm text-slate-500">此项不回流库存,直接标记已买。</p>
+                        <p className="text-sm text-slate-500">{t('shopping.noRestock')}</p>
                     )}
                     {error && <p className="text-sm text-red-500">{error}</p>}
                     <button
@@ -75,7 +77,7 @@ export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurcha
                         onClick={submit}
                         disabled={submitting}
                     >
-                        {submitting ? '处理中…' : '确认已买'}
+                        {submitting ? t('shopping.processing') : t('shopping.confirmBought')}
                     </button>
                 </div>
             </DialogContent>

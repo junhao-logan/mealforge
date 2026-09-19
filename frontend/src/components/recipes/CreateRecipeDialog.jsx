@@ -3,6 +3,7 @@
 // 配料的食材从库里搜/或现场创建(A2 单位本位), 单位下拉用后端 allowed_units。
 import { Plus, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { CreateIngredientForm } from '@/components/ingredients/CreateIngredientForm'
 import {
@@ -14,6 +15,7 @@ import { api } from '@/lib/api'
 import { unitLabel } from '@/lib/units'
 
 export function CreateRecipeDialog({ onCreated }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [open, setOpen] = useState(false)
     const [submitting, setSubmitting] = useState(false)
@@ -48,10 +50,10 @@ export function CreateRecipeDialog({ onCreated }) {
     }
 
     async function submit() {
-        if (!name.trim()) { setError('请填写菜名'); return }
-        if (!instructions.trim()) { setError('请填写做法说明'); return }
+        if (!name.trim()) { setError(t('recipes.errName')); return }
+        if (!instructions.trim()) { setError(t('recipes.errInstructions')); return }
         const filled = rows.filter((r) => r.ingredient && Number(r.amount) > 0)
-        if (filled.length === 0) { setError('至少添加一样配料(并填数量)'); return }
+        if (filled.length === 0) { setError(t('recipes.errIngredient')); return }
 
         try {
             setSubmitting(true)
@@ -75,7 +77,7 @@ export function CreateRecipeDialog({ onCreated }) {
             setOpen(false)
             onCreated?.(created)
         } catch (e) {
-            setError(e.message || '创建失败')
+            setError(e.message || t('recipes.errCreate'))
         } finally {
             setSubmitting(false)
         }
@@ -90,20 +92,20 @@ export function CreateRecipeDialog({ onCreated }) {
                     className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                 >
                     <Plus className="h-4 w-4" />
-                    手动创建
+                    {t('recipes.manualCreate')}
                 </span>
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>手动创建菜谱</DialogTitle>
+                    <DialogTitle>{t('recipes.manualTitle')}</DialogTitle>
                 </DialogHeader>
 
                 <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">菜名</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('recipes.name')}</label>
                         <input
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                            placeholder="例如: 番茄炒蛋"
+                            placeholder={t('recipes.namePh')}
                             value={name}
                             onChange={(e) => setName(e.target.value)}
                         />
@@ -111,20 +113,20 @@ export function CreateRecipeDialog({ onCreated }) {
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">菜系(可选)</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('recipes.cuisineOpt')}</label>
                             <input
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                placeholder="中餐/西餐…"
+                                placeholder={t('recipes.cuisinePh')}
                                 value={cuisine}
                                 onChange={(e) => setCuisine(e.target.value)}
                             />
                         </div>
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">份数</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('recipes.servings')}</label>
                             <input
                                 type="number"
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                placeholder="默认 1"
+                                placeholder={t('recipes.servingsPhDefault')}
                                 value={servings}
                                 onChange={(e) => setServings(e.target.value)}
                             />
@@ -133,18 +135,18 @@ export function CreateRecipeDialog({ onCreated }) {
 
                     <div>
                         <div className="mb-1 flex items-center justify-between">
-                            <label className="text-sm font-medium text-slate-700">配料</label>
+                            <label className="text-sm font-medium text-slate-700">{t('recipes.ingredients')}</label>
                             <button
                                 type="button"
                                 className="flex items-center gap-1 text-sm text-slate-600 hover:text-slate-900"
                                 onClick={addRow}
                             >
-                                <Plus className="h-4 w-4" /> 添加配料
+                                <Plus className="h-4 w-4" /> {t('recipes.addIngredient')}
                             </button>
                         </div>
                         {rows.length === 0 && (
                             <p className="rounded-md border border-dashed border-slate-300 px-3 py-3 text-center text-sm text-slate-400">
-                                点"添加配料"从食材库选择或创建
+                                {t('recipes.ingredientsEmpty')}
                             </p>
                         )}
                         <div className="space-y-2">
@@ -161,11 +163,11 @@ export function CreateRecipeDialog({ onCreated }) {
                     </div>
 
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">做法说明</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('recipes.instructions')}</label>
                         <textarea
                             rows={4}
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                            placeholder="每步一行, 例如:&#10;1. 热锅下油&#10;2. 打散鸡蛋炒至凝固盛出&#10;3. 下番茄翻炒出汁, 回锅鸡蛋"
+                            placeholder={t('recipes.instructionsPh')}
                             value={instructions}
                             onChange={(e) => setInstructions(e.target.value)}
                         />
@@ -178,7 +180,7 @@ export function CreateRecipeDialog({ onCreated }) {
                         onClick={submit}
                         disabled={submitting}
                     >
-                        {submitting ? '创建中…' : '创建菜谱'}
+                        {submitting ? t('recipes.creating') : t('recipes.createBtn')}
                     </button>
                 </div>
             </DialogContent>
@@ -188,6 +190,7 @@ export function CreateRecipeDialog({ onCreated }) {
 
 // 一条配料: 未选 → 搜索 / 创建食物; 已选 → 名字 + 数量 + 单位 + 删除
 function IngredientRow({ row, onPick, onField, onRemove }) {
+    const { t } = useTranslation()
     // 创建食物模式
     if (row.creating) {
         return (
@@ -205,7 +208,7 @@ function IngredientRow({ row, onPick, onField, onRemove }) {
         return (
             <div className="rounded-md border border-slate-200 p-2">
                 <div className="mb-1 flex items-center justify-between">
-                    <span className="px-1 text-xs text-slate-400">选择食材</span>
+                    <span className="px-1 text-xs text-slate-400">{t('recipes.pickIngredient')}</span>
                     <button type="button" onClick={onRemove} className="text-slate-400 hover:text-slate-600">
                         <X className="h-4 w-4" />
                     </button>
@@ -227,7 +230,7 @@ function IngredientRow({ row, onPick, onField, onRemove }) {
             <input
                 type="number"
                 className="w-20 rounded-md border border-slate-300 px-2 py-1 text-sm"
-                placeholder="量"
+                placeholder={t('recipes.amount')}
                 value={row.amount}
                 onChange={(e) => onField('amount', e.target.value)}
             />
@@ -253,6 +256,7 @@ function IngredientRow({ row, onPick, onField, onRemove }) {
 
 // 内联食材搜索(/ingredients?name= + 分组); 搜不到 → 交给父级切"创建食物"
 function InlineIngredientSearch({ onPick, onCreateNew }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [query, setQuery] = useState('')
     const debounced = useDebounce(query, 300)
@@ -288,14 +292,14 @@ function InlineIngredientSearch({ onPick, onCreateNew }) {
                 <input
                     autoFocus
                     className="w-full rounded-md border border-slate-300 py-1.5 pl-8 pr-3 text-sm"
-                    placeholder="搜索食材…"
+                    placeholder={t('recipes.searchPh')}
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                 />
             </div>
             {(results.length > 0 || loading || noResult) && (
                 <div className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
-                    {loading && <p className="py-2 text-center text-xs text-slate-400">搜索中…</p>}
+                    {loading && <p className="py-2 text-center text-xs text-slate-400">{t('recipes.searching')}</p>}
                     {results.map((ing) => (
                         <button
                             key={ing.id}
@@ -305,7 +309,7 @@ function InlineIngredientSearch({ onPick, onCreateNew }) {
                         >
                             <span>{ing.name}</span>
                             {ing.visibility === 'private' && (
-                                <span className="text-xs text-slate-400">私人</span>
+                                <span className="text-xs text-slate-400">{t('recipes.private')}</span>
                             )}
                         </button>
                     ))}
@@ -316,7 +320,7 @@ function InlineIngredientSearch({ onPick, onCreateNew }) {
                             onClick={() => onCreateNew(debounced)}
                         >
                             <Plus className="h-4 w-4" />
-                            创建 "{debounced}"
+                            {t('recipes.createNamed', { name: debounced })}
                         </button>
                     )}
                 </div>

@@ -1,6 +1,7 @@
 // src/components/mealplan/AddEntryDialog.jsx
 // 手动排餐: 选 plan + 菜谱 + 餐段 → POST /{plan_id}/entries(指定 plan)
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -8,14 +9,16 @@ import {
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 
+// 餐段: value 存后端, labelKey 显示
 const MEALS = [
-    { value: 'breakfast', label: '早餐' },
-    { value: 'lunch', label: '午餐' },
-    { value: 'dinner', label: '晚餐' },
-    { value: 'snack', label: '加餐' },
+    { value: 'breakfast', labelKey: 'meal.breakfast' },
+    { value: 'lunch', labelKey: 'meal.lunch' },
+    { value: 'dinner', labelKey: 'meal.dinner' },
+    { value: 'snack', labelKey: 'meal.snack' },
 ]
 
 export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAdded }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [recipes, setRecipes] = useState([])
     const [planId, setPlanId] = useState('')
@@ -46,16 +49,16 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
                 }
                 if (alive) setRecipes(withVariants)
             } catch (e) {
-                if (alive) setError(e.message || '加载菜谱失败')
+                if (alive) setError(e.message || t('mealPlans.errLoadRecipes'))
             }
         }
         load()
         return () => { alive = false }
-    }, [open, call])
+    }, [open, call, t])
 
     async function submit() {
-        if (!planId) { setError('请选择计划'); return }
-        if (!variantId) { setError('请选择菜谱'); return }
+        if (!planId) { setError(t('mealPlans.errSelectPlan')); return }
+        if (!variantId) { setError(t('mealPlans.errSelectRecipe')); return }
         try {
             setSubmitting(true)
             setError(null)
@@ -73,10 +76,11 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
             onClose?.()
         } catch (e) {
             // add_entry 会校验日期在 plan 范围内; 但新 plan 日期是今天, 排未来餐会 422
+            // 注: 这里匹配后端返回的中文错误串, 后端本地化前保持不变
             if (e.status === 422 && String(e.message).includes('超出计划范围')) {
-                setError('该日期超出所选计划范围。提示: 新建计划后先排今天的餐,范围会自动扩展;或选其他计划。')
+                setError(t('mealPlans.errOutOfRange'))
             } else {
-                setError(e.message || '排餐失败')
+                setError(e.message || t('mealPlans.errAddEntry'))
             }
         } finally {
             setSubmitting(false)
@@ -87,33 +91,33 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
         <Dialog open={open} onOpenChange={(o) => { if (!o) onClose?.() }}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>排餐 · {date}</DialogTitle>
+                    <DialogTitle>{t('mealPlans.addEntryTitle', { date })}</DialogTitle>
                 </DialogHeader>
 
                 <div className="space-y-4">
                     {/* 计划 */}
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">加入计划</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.addToPlan')}</label>
                         <select
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                             value={planId}
                             onChange={(e) => setPlanId(e.target.value)}
                         >
                             {plans.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name || `计划 #${p.id}`}</option>
+                                <option key={p.id} value={p.id}>{p.name || t('mealPlans.planFallback', { id: p.id })}</option>
                             ))}
                         </select>
                     </div>
 
                     {/* 菜谱 */}
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">菜谱</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.recipe')}</label>
                         <select
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                             value={variantId}
                             onChange={(e) => setVariantId(e.target.value)}
                         >
-                            <option value="">选择菜谱…</option>
+                            <option value="">{t('mealPlans.selectRecipePh')}</option>
                             {recipes.map((r) => (
                                 <option key={r.variant_id} value={r.variant_id}>{r.name}</option>
                             ))}
@@ -122,19 +126,19 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">餐段</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.mealSlot')}</label>
                             <select
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                                 value={mealType}
                                 onChange={(e) => setMealType(e.target.value)}
                             >
                                 {MEALS.map((m) => (
-                                    <option key={m.value} value={m.value}>{m.label}</option>
+                                    <option key={m.value} value={m.value}>{t(m.labelKey)}</option>
                                 ))}
                             </select>
                         </div>
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">份数</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('recipes.servings')}</label>
                             <input
                                 type="number" min="1"
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
@@ -151,7 +155,7 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
                         onClick={submit}
                         disabled={submitting}
                     >
-                        {submitting ? '添加中…' : '加入计划'}
+                        {submitting ? t('inventory.adding') : t('mealPlans.addToPlan')}
                     </button>
                 </div>
             </DialogContent>

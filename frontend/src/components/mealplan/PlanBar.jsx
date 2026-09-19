@@ -2,6 +2,7 @@
 // plan 筛选栏: 全部/某plan 切换 + 新建。删除移到选中后的右上角(避免误触)。
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -11,6 +12,7 @@ import { api } from '@/lib/api'
 import { toISO } from '@/lib/dateRange'
 
 export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     const [showCreate, setShowCreate] = useState(false)
     const [newName, setNewName] = useState('')
@@ -18,7 +20,7 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
     const [error, setError] = useState(null)
 
     async function createPlan() {
-        if (!newName.trim()) { setError('请填写计划名'); return }
+        if (!newName.trim()) { setError(t('mealPlans.errPlanName')); return }
         try {
             setCreating(true)
             setError(null)
@@ -30,7 +32,7 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
             setShowCreate(false)
             onChanged?.()
         } catch (e) {
-            setError(e.message || '创建失败')
+            setError(e.message || t('recipes.errCreate'))
         } finally {
             setCreating(false)
         }
@@ -45,7 +47,7 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                     }`}
                 onClick={() => onSelect(null)}
             >
-                全部计划
+                {t('mealPlans.allPlans')}
             </button>
 
             {plans.map((p) => (
@@ -57,7 +59,7 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                         }`}
                     onClick={() => onSelect(p.id)}
                 >
-                    {p.name || `计划 #${p.id}`}
+                    {p.name || t('mealPlans.planFallback', { id: p.id })}
                 </button>
             ))}
 
@@ -65,27 +67,27 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                 className="flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-3 py-1 text-sm text-slate-500 hover:bg-slate-50"
                 onClick={() => setShowCreate(true)}
             >
-                <Plus className="h-3.5 w-3.5" /> 新建计划
+                <Plus className="h-3.5 w-3.5" /> {t('mealPlans.newPlan')}
             </button>
 
             <Dialog open={showCreate} onOpenChange={(o) => { setShowCreate(o); if (!o) { setNewName(''); setError(null) } }}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>新建计划</DialogTitle>
+                        <DialogTitle>{t('mealPlans.newPlan')}</DialogTitle>
                     </DialogHeader>
                     <div className="space-y-4">
                         <div>
-                            <label className="mb-1 block text-sm font-medium text-slate-700">计划名</label>
+                            <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.planName')}</label>
                             <input
                                 autoFocus
                                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                                placeholder="例如: 减脂周、增肌计划"
+                                placeholder={t('mealPlans.planNamePh')}
                                 value={newName}
                                 onChange={(e) => setNewName(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && createPlan()}
                             />
                             <p className="mt-1 text-xs text-slate-400">
-                                日期会随排餐自动调整,先建个空计划即可。
+                                {t('mealPlans.planHint')}
                             </p>
                         </div>
                         {error && <p className="text-sm text-red-500">{error}</p>}
@@ -94,7 +96,7 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                             onClick={createPlan}
                             disabled={creating}
                         >
-                            {creating ? '创建中…' : '创建'}
+                            {creating ? t('recipes.creating') : t('mealPlans.create')}
                         </button>
                     </div>
                 </DialogContent>
@@ -105,14 +107,16 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
 
 // 删除按钮(选中某plan后显示在右上角)—— 独立导出
 export function DeletePlanButton({ plan, onDeleted }) {
+    const { t } = useTranslation()
     const { call } = useApi()
     async function del() {
-        if (!confirm(`删除计划「${plan.name || '未命名'}」? 其下所有餐次也会一并删除。`)) return
+        const planName = plan.name || t('mealPlans.unnamed')
+        if (!confirm(t('mealPlans.confirmDeletePlan', { name: planName }))) return
         try {
             await call(api.del, `/meal-plans/${plan.id}`)
             onDeleted?.()
         } catch (e) {
-            alert(e.message || '删除失败')
+            alert(e.message || t('common.deleteFailed'))
         }
     }
     return (
@@ -120,7 +124,7 @@ export function DeletePlanButton({ plan, onDeleted }) {
             className="rounded-md border border-red-200 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
             onClick={del}
         >
-            删除此计划
+            {t('mealPlans.deletePlan')}
         </button>
     )
 }
