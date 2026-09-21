@@ -39,6 +39,8 @@
     "servings": "{{count}} 份",
     "completed": "已完成",
     "complete": "完成",
+    "uncomplete": "撤销完成",
+    "uncompleteFailed": "撤销失败",
     "confirmDelete": "确定删除?",
     "completeFailed": "完成失败",
     "shortStock": "已完成,但库存不足 {{count}} 样"

@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.inventory.models import InventoryTransaction
-from app.inventory.services import deduct_for_entry
+from app.inventory.services import deduct_for_entry, restock_for_entry
 from tests.factories import (
     make_entry,
     make_ingredient,
@@ -132,3 +132,65 @@ async def test_same_expiry_ordered_by_purchase_then_id(db):
 
     assert earlier_buy.quantity_grams == Decimal("40")  # 先买的先扣
     assert later_buy.quantity_grams == Decimal("100")
+
+# ---------- 撤销完成: restock_for_entry (I2 反向回补) ----------
+
+async def test_restock_reverses_deduction(db):
+    """撤销完成: 把扣掉的量原样退回原批次。"""
+    u = await make_user(db)
+    tomato = await make_ingredient(db, "tomato")
+    b = await make_stock(db, u, tomato, 100, expires_at=D1)
+    entry = await _entry_needing(db, u, tomato, 60)
+
+    await deduct_for_entry(db, u.id, entry)
+    assert b.quantity_grams == Decimal("40")     # 扣掉 60
+
+    await restock_for_entry(db, u.id, entry)
+    assert b.quantity_grams == Decimal("100")    # 原样退回
+
+
+async def test_restock_crosses_batches_back(db):
+    """跨批次扣的, 撤销时各自退回原批。"""
+    u = await make_user(db)
+    tomato = await make_ingredient(db, "tomato")
+    early = await make_stock(db, u, tomato, 50, expires_at=D1)
+    late = await make_stock(db, u, tomato, 100, expires_at=D2)
+    entry = await _entry_needing(db, u, tomato, 80)     # 早 50 + 晚 30
+
+    await deduct_for_entry(db, u.id, entry)
+    assert early.quantity_grams == Decimal("0")
+    assert late.quantity_grams == Decimal("70")
+
+    await restock_for_entry(db, u.id, entry)
+    assert early.quantity_grams == Decimal("50")   # 各自复原
+    assert late.quantity_grams == Decimal("100")
+
+
+async def test_restock_idempotent(db):
+    """重复撤销不重复回补(按 source_entry_id 净额)。"""
+    u = await make_user(db)
+    tomato = await make_ingredient(db, "tomato")
+    b = await make_stock(db, u, tomato, 100, expires_at=D1)
+    entry = await _entry_needing(db, u, tomato, 60)
+
+    await deduct_for_entry(db, u.id, entry)
+    await restock_for_entry(db, u.id, entry)
+    await restock_for_entry(db, u.id, entry)       # 第二次应无效果
+    assert b.quantity_grams == Decimal("100")
+
+
+async def test_recomplete_cycle_nets_correctly(db):
+    """完成→撤销→再完成→再撤销: 净额法保证不重复扣/补。"""
+    u = await make_user(db)
+    tomato = await make_ingredient(db, "tomato")
+    b = await make_stock(db, u, tomato, 100, expires_at=D1)
+    entry = await _entry_needing(db, u, tomato, 60)
+
+    await deduct_for_entry(db, u.id, entry)
+    assert b.quantity_grams == Decimal("40")
+    await restock_for_entry(db, u.id, entry)
+    assert b.quantity_grams == Decimal("100")
+    await deduct_for_entry(db, u.id, entry)        # 再完成
+    assert b.quantity_grams == Decimal("40")
+    await restock_for_entry(db, u.id, entry)        # 再撤销
+    assert b.quantity_grams == Decimal("100")

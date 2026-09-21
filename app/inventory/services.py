@@ -1,21 +1,21 @@
 # app/inventory/services.py
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
+
 from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.ingredients.models import Ingredient
 from app.inventory.models import InventoryItem, InventoryTransaction
 from app.inventory.schemas import InventoryItemCreate, InventoryItemUpdate
-from datetime import date, timedelta
-from decimal import Decimal
+from app.meal_plans.models import MealPlanEntry
+from app.meal_plans.services import line_demand  # I13 需求公式(单一真相源)
 from app.recipes.models import RecipeIngredient
 from app.recipes.services import resolve_quantity
-from app.meal_plans.models import MealPlanEntry
-from app.meal_plans.services import line_demand   # I13 需求公式(单一真相源)
 
-from app.core.config import get_settings
 
 async def create_inventory_item(
     db: AsyncSession, user_id, data: InventoryItemCreate
@@ -149,6 +149,61 @@ async def deduct_for_entry(
 
     await db.flush()
     return shortfalls
+
+
+async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> None:
+    """撤销完成餐次 → 把该 entry 完成时扣掉的库存原样退回原批次(I2)。
+
+    幂等/健壮做法: **按 source_entry_id 净额回补**, 而非逐条反转。
+    · 对该 entry 的所有流水按 (批次) 聚合 delta_grams:
+      完成时扣减为负、之前撤销回补为正, 净额 = 当前仍欠该批次的量。
+    · 净额为负(仍有未回补的消耗)才回补, 回补 = -净额(正); 已净平则跳过
+      —— 这样 完成→撤销→再完成→再撤销 循环也不会重复回补。
+    · 原批次已被删除(inventory_item_id 置空)的无法回补, 跳过。
+    · 每个回补批次记一条反向流水(+delta, reason='meal_reversal')。
+    不 commit —— 由 router 与 entry.is_completed 同事务提交。
+    """
+    rows = (await db.execute(
+        select(
+            InventoryTransaction.inventory_item_id,
+            InventoryTransaction.ingredient_id,
+            func.sum(InventoryTransaction.delta_grams),
+        )
+        .where(InventoryTransaction.source_entry_id == entry.id)
+        .group_by(
+            InventoryTransaction.inventory_item_id,
+            InventoryTransaction.ingredient_id,
+        )
+    )).all()
+
+    for item_id, ingredient_id, net in rows:
+        give_back = -(net or Decimal("0"))     # 净消耗为负 → 回补为正
+        if give_back <= 0:
+            continue                            # 已净平(撤销过)或非消耗, 跳过
+        if item_id is None:
+            continue                            # 原批次已删, 无法回补
+
+        # 行锁取原批次, += 回补(零余量批次被保留正是为了这一步, I1)
+        batch = (await db.execute(
+            select(InventoryItem)
+            .where(InventoryItem.id == item_id)
+            .with_for_update()
+        )).scalar_one_or_none()
+        if batch is None:
+            continue
+
+        batch.quantity_grams += give_back
+        db.add(InventoryTransaction(
+            user_id=user_id,
+            ingredient_id=ingredient_id,
+            inventory_item_id=item_id,
+            delta_grams=give_back,              # 回补为正
+            reason="meal_reversal",            # 撤销完成的反向流水
+            source_entry_id=entry.id,
+        ))
+
+    await db.flush()
+
 
 async def get_owned_item(db: AsyncSession, user_id, item_id: int) -> InventoryItem | None:
     """取批次并校验归属。不是自己的 → None(router 转 404, 不泄漏存在性)。"""

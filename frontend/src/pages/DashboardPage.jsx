@@ -66,6 +66,15 @@ export function DashboardPage() {
         }
     }
 
+    async function handleUncomplete(entry) {
+        try {
+            await call(api.patch, `/meal-plans/${entry.plan_id}/entries/${entry.id}/uncomplete`)
+            await reload()
+        } catch (e) {
+            alert(e.message || t('meal.uncompleteFailed'))
+        }
+    }
+
     async function handleDelete(entry) {
         if (!confirm(t('meal.confirmDelete'))) return
         try {
@@ -122,7 +131,7 @@ export function DashboardPage() {
                     ) : (
                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             {entries.map((e) => (
-                                <MealEntryCard key={e.id} entry={e} onComplete={handleComplete} onDelete={handleDelete} />
+                                <MealEntryCard key={e.id} entry={e} onComplete={handleComplete} onUncomplete={handleUncomplete} onDelete={handleDelete} />
                             ))}
                         </div>
                     )}

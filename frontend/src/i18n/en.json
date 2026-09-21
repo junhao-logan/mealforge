@@ -39,6 +39,8 @@
     "servings": "{{count}} servings",
     "completed": "Done",
     "complete": "Complete",
+    "uncomplete": "Undo completion",
+    "uncompleteFailed": "Failed to undo",
     "confirmDelete": "Delete this entry?",
     "completeFailed": "Failed to complete",
     "shortStock": "Done, but {{count}} item(s) short on stock"

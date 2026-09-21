@@ -422,3 +422,31 @@ async def complete_entry(
         entry=MealPlanEntryRead.model_validate(entry),
         shortfalls=[ShortfallItem(**s) for s in shortfalls],
     )
+
+
+@router.patch("/{plan_id:int}/entries/{entry_id}/uncomplete", response_model=MealPlanEntryRead)
+async def uncomplete_entry(
+    plan_id: int,
+    entry_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> MealPlanEntry:
+    """撤销完成 + 把完成时扣的库存退回原批次(同事务, I2)。
+    幂等: 未完成的 entry 直接返回, 不重复回补。
+    """
+    entry = await _get_owned_entry(db, plan_id, entry_id, user)
+
+    if not entry.is_completed:
+        return entry                      # 本就未完成, 无需回补
+
+    entry.is_completed = False
+    entry.completed_at = None
+
+    await inventory_services.restock_for_entry(db, user.id, entry)
+
+    await db.commit()
+    await db.refresh(entry)
+    await invalidate_summary(redis, user.id, entry.scheduled_date)  # 失效该天
+
+    return entry

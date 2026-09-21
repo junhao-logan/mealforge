@@ -72,6 +72,15 @@ export function MealPlansPage() {
         }
     }
 
+    async function handleUncomplete(entry) {
+        try {
+            await call(api.patch, `/meal-plans/${entry.plan_id}/entries/${entry.id}/uncomplete`)
+            await reload()
+        } catch (e) {
+            alert(e.message || t('meal.uncompleteFailed'))
+        }
+    }
+
     async function handleDelete(entry) {
         if (!confirm(t('mealPlans.confirmDeleteEntry'))) return
         try {
@@ -154,13 +163,13 @@ export function MealPlansPage() {
                 isWeek ? (
                     <WeekView
                         days={days} entries={visibleEntries} orientation={orientation}
-                        onComplete={handleComplete} onDelete={handleDelete}
+                        onComplete={handleComplete} onUncomplete={handleUncomplete} onDelete={handleDelete}
                         onAdd={(iso) => setAddDate(iso)}
                     />
                 ) : (
                     <DayView
                         date={dayAnchor} entries={visibleEntries}
-                        onComplete={handleComplete} onDelete={handleDelete}
+                        onComplete={handleComplete} onUncomplete={handleUncomplete} onDelete={handleDelete}
                         onAdd={(iso) => setAddDate(iso)}
                     />
                 )
@@ -202,7 +211,7 @@ function entriesOf(entries, iso) {
 }
 
 // ── 周视图: 竖版(每天一块) / 横版(7列并排) ──
-function WeekView({ days, entries, orientation, onComplete, onDelete, onAdd }) {
+function WeekView({ days, entries, orientation, onComplete, onUncomplete, onDelete, onAdd }) {
     if (orientation === 'horizontal') {
         return (
             <div className="grid grid-cols-7 gap-2">
@@ -221,7 +230,7 @@ function WeekView({ days, entries, orientation, onComplete, onDelete, onAdd }) {
                             </div>
                             <div className="space-y-1.5">
                                 {dayEntries.map((e) => (
-                                    <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onDelete={onDelete} />
+                                    <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onUncomplete={onUncomplete} onDelete={onDelete} />
                                 ))}
                                 <button
                                     className="w-full rounded-md border border-dashed border-slate-200 py-1 text-xs text-slate-400 hover:bg-slate-50"
@@ -246,7 +255,7 @@ function WeekView({ days, entries, orientation, onComplete, onDelete, onAdd }) {
                 return (
                     <DayBlock
                         key={iso} date={d} dayEntries={dayEntries}
-                        onComplete={onComplete} onDelete={onDelete} onAdd={onAdd}
+                        onComplete={onComplete} onUncomplete={onUncomplete} onDelete={onDelete} onAdd={onAdd}
                     />
                 )
             })}
@@ -262,7 +271,7 @@ const MEAL_SECTIONS = [
     { type: 'snack', labelKey: 'meal.snack' },
 ]
 
-function DayView({ date, entries, onComplete, onDelete, onAdd }) {
+function DayView({ date, entries, onComplete, onUncomplete, onDelete, onAdd }) {
     const { t } = useTranslation()
     const iso = toISO(date)
     const dayEntries = entriesOf(entries, iso)
@@ -289,7 +298,7 @@ function DayView({ date, entries, onComplete, onDelete, onAdd }) {
                         ) : (
                             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                                 {secEntries.map((e) => (
-                                    <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onDelete={onDelete} />
+                                    <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onUncomplete={onUncomplete} onDelete={onDelete} />
                                 ))}
                             </div>
                         )}
@@ -301,7 +310,7 @@ function DayView({ date, entries, onComplete, onDelete, onAdd }) {
 }
 
 // 一天的块(周竖版 + 天视图共用)
-function DayBlock({ date, dayEntries, big, onComplete, onDelete, onAdd }) {
+function DayBlock({ date, dayEntries, big, onComplete, onUncomplete, onDelete, onAdd }) {
     const { t } = useTranslation()
     const iso = toISO(date)
     return (
@@ -324,7 +333,7 @@ function DayBlock({ date, dayEntries, big, onComplete, onDelete, onAdd }) {
             ) : (
                 <div className={`grid grid-cols-1 gap-2 ${big ? 'sm:grid-cols-2' : 'sm:grid-cols-2 lg:grid-cols-3'}`}>
                     {dayEntries.map((e) => (
-                        <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onDelete={onDelete} />
+                        <MealEntryCard key={e.id} entry={e} onComplete={onComplete} onUncomplete={onUncomplete} onDelete={onDelete} />
                     ))}
                 </div>
             )}
