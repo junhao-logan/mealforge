@@ -186,7 +186,8 @@ async def _variant_catalog(db: AsyncSession, user_id) -> list[dict]:
 
     rows = (await db.execute(
         select(
-            RecipeVariant.id, Recipe.name, RecipeVariant.name, Ingredient.name,
+            RecipeVariant.id, Recipe.name, RecipeVariant.name,
+            Ingredient.name, RecipeIngredient.ingredient_id,
         )
         .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
         .join(RecipeIngredient, RecipeIngredient.recipe_variant_id == RecipeVariant.id)
@@ -195,13 +196,25 @@ async def _variant_catalog(db: AsyncSession, user_id) -> list[dict]:
     )).all()
 
     catalog: dict[int, dict] = {}
-    for v_id, r_name, v_name, ing_name in rows:
+    for v_id, r_name, v_name, ing_name, ing_id in rows:
         c = catalog.setdefault(v_id, {
             "variant_id": v_id, "recipe_name": r_name,
-            "variant_name": v_name, "ingredients": [],
+            "variant_name": v_name, "ingredients": [], "ingredient_ids": [],
         })
         c["ingredients"].append(ing_name)
+        c["ingredient_ids"].append(ing_id)
     return list(catalog.values())
+
+
+async def _inventory_ingredient_ids(db: AsyncSession, user_id) -> set[int]:
+    """当前有货(quantity_grams>0)的食材 id 集合 —— 供"只用库存"过滤。"""
+    from app.inventory.models import InventoryItem
+    rows = (await db.execute(
+        select(InventoryItem.ingredient_id)
+        .where(InventoryItem.user_id == user_id, InventoryItem.quantity_grams > 0)
+        .distinct()
+    )).all()
+    return {r[0] for r in rows}
 
 
 def _validate_plan(tool_input: dict, catalog_ids: set[int], days: int,
@@ -226,44 +239,17 @@ def _validate_plan(tool_input: dict, catalog_ids: set[int], days: int,
     return entries
 
 
-async def _persist_plan_success(db, user, result, prompt, model, *,
-                                start_date, days) -> object:
-    """成功: 日志 + MealPlan + entries 同事务, 两向链, 一次 commit。"""
-    from datetime import timedelta
-
-    from app.meal_plans.models import MealPlan, MealPlanEntry
-
+async def _log_plan_success(db, user, result, prompt, model) -> None:
+    """AI 调用成功 → 记一条 meal_plan 成功日志(审计)。
+    注意: 生成阶段只出草稿、不建计划/entries —— 计划在用户确认(commit)时才落库。
+    """
     ti = result.tool_input
-    log = AiGenerationLog(
+    db.add(AiGenerationLog(
         user_id=user.id, kind="meal_plan", status="success", model=model,
         prompt=prompt, raw_response=json.dumps(ti, ensure_ascii=False),
         input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-    )
-    db.add(log)
-    await db.flush()
-
-    plan = MealPlan(
-        user_id=user.id,
-        start_date=start_date,
-        end_date=start_date + timedelta(days=days - 1),
-        plan_type="ai_generated",
-        ai_generation_log_id=log.id,
-    )
-    db.add(plan)
-    await db.flush()
-
-    for e in ti["entries"]:
-        db.add(MealPlanEntry(
-            meal_plan_id=plan.id,
-            scheduled_date=start_date + timedelta(days=e["day_offset"]),
-            meal_type=e["meal_type"],
-            recipe_variant_id=e["recipe_variant_id"],
-            servings=Decimal(str(e.get("servings") or 1)),
-        ))
-    await db.flush()
-    log.created_recipe_id = None   # meal_plan 类型不关联单个菜谱
+    ))
     await db.commit()
-    return plan
 
 
 async def generate_meal_plan(
@@ -271,11 +257,16 @@ async def generate_meal_plan(
     start_date, days: int = 7,
     meals: list[str] | None = None,
     free_text: str | None = None,
+    ingredient_source: str = "any",
+    language: str | None = None,
 ):
-    """AI 从已有可见菜谱排布 N 天计划(Week 8 第一版, 不生成新菜谱)。
+    """AI 从已有可见菜谱排布 N 天计划 → 返回**草稿**(不落库)。
 
-    扩展点: 未来"不足时 AI 生成补齐" —— catalog 不够时叫 generate_recipe 补,
-    主流程不变。
+    · ingredient_source='inventory': 只从"库存能做"的菜谱里排, 不够就少排不硬凑
+    · ingredient_source='any': 从全部可见菜谱排(缺料后续在采购页补齐)
+    · 只出草稿, 用户预览确认后经 commit 端点追加进计划(阶段A)
+    · 阶段B 再叠加 recipe_source='new'(AI 现编新菜谱)
+    返回: {"start_date","days","meals","entries":[{...,recipe_name,variant_name}]}
     """
     from app.ai.prompts import build_meal_plan_message
 
@@ -284,21 +275,51 @@ async def generate_meal_plan(
     if not catalog:
         raise EmptyRecipeCatalogError("没有可用菜谱, 无法生成周计划")
 
-    catalog_ids = {c["variant_id"] for c in catalog}
+    inventory_only = ingredient_source == "inventory"
+    if inventory_only:
+        # 只保留"所有配料都在库存"的做法(库存能做)
+        stock = await _inventory_ingredient_ids(db, user.id)
+        catalog = [
+            c for c in catalog
+            if c["ingredient_ids"] and set(c["ingredient_ids"]) <= stock
+        ]
+        if not catalog:
+            raise EmptyRecipeCatalogError("库存现在做不出任何已有菜谱, 先加点库存或改用'允许采购'")
+
+    by_id = {c["variant_id"]: c for c in catalog}
+    catalog_ids = set(by_id)
     prompt = build_meal_plan_message(
-        catalog, days=days, meals=meals, free_text=free_text
+        catalog, days=days, meals=meals, free_text=free_text,
+        inventory_only=inventory_only, language=language,
     )
     model = get_settings().gemini_model
 
     try:
         result = await generate_meal_plan_raw(prompt)
-        _validate_plan(result.tool_input, catalog_ids, days, set(meals))
-        return await _persist_plan_success(
-            db, user, result, prompt, model, start_date=start_date, days=days
-        )
+        entries = _validate_plan(result.tool_input, catalog_ids, days, set(meals))
+        await _log_plan_success(db, user, result, prompt, model)
     except (AiError, RecipeValidationError) as e:
         raw = getattr(e, "raw", None)
         await _persist_failure_log(
             db, user, prompt, model, str(e), raw, kind="meal_plan"
         )
         raise
+
+    # 用 catalog 补菜名, 组装草稿(不落库)
+    draft_entries = []
+    for e in entries:
+        c = by_id.get(e["recipe_variant_id"], {})
+        draft_entries.append({
+            "day_offset": e["day_offset"],
+            "meal_type": e["meal_type"],
+            "recipe_variant_id": e["recipe_variant_id"],
+            "servings": Decimal(str(e.get("servings") or 1)),
+            "recipe_name": c.get("recipe_name", ""),
+            "variant_name": c.get("variant_name"),
+        })
+    return {
+        "start_date": start_date,
+        "days": days,
+        "meals": meals,
+        "entries": draft_entries,
+    }

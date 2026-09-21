@@ -1,5 +1,6 @@
 // src/components/mealplan/GenerateMealPlanDialog.jsx
-// AI 生成周计划: 填 天数/餐段/偏好 → POST /meal-plans/generate → AI 从已有菜谱排布
+// AI 生成周计划(B4.2): 弹窗只填选项 + 选目标计划 → POST /generate 得草稿 →
+// 把草稿交给页面(onDraft), 页面用"闪烁绿虚线"卡片铺进视图, 用户确认后才 commit 入库。
 import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -17,54 +18,58 @@ const MEAL_OPTIONS = [
     { value: 'dinner', labelKey: 'meal.dinner' },
 ]
 
-export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
-    const { t } = useTranslation()
+export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId = null, onDraft }) {
+    const { t, i18n } = useTranslation()
     const { call } = useApi()
     const [open, setOpen] = useState(false)
-    const [submitting, setSubmitting] = useState(false)
+    const [busy, setBusy] = useState(false)
     const [error, setError] = useState(null)
 
     const [days, setDays] = useState(7)
     const [meals, setMeals] = useState(['lunch', 'dinner'])
     const [startDate, setStartDate] = useState(defaultStart || '')
     const [freeText, setFreeText] = useState('')
+    const [ingredientSource, setIngredientSource] = useState('any')   // 'any' | 'inventory'
+    const [targetPlanId, setTargetPlanId] = useState(activePlanId != null ? String(activePlanId) : '')
 
     function toggleMeal(m) {
-        setMeals((prev) =>
-            prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m],
-        )
+        setMeals((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]))
     }
 
     function reset() {
         setDays(7); setMeals(['lunch', 'dinner'])
-        setStartDate(defaultStart || ''); setFreeText(''); setError(null)
+        setStartDate(defaultStart || ''); setFreeText(''); setIngredientSource('any')
+        setTargetPlanId(activePlanId != null ? String(activePlanId) : ''); setError(null)
     }
 
     async function generate() {
         if (meals.length === 0) { setError(t('mealPlans.errPickMeal')); return }
         try {
-            setSubmitting(true)
-            setError(null)
-            const body = { days: Number(days), meals }
+            setBusy(true); setError(null)
+            const body = {
+                days: Number(days), meals,
+                ingredient_source: ingredientSource,
+                language: (i18n.language || 'en').startsWith('zh') ? 'zh' : 'en',
+            }
             if (startDate) body.start_date = startDate
             if (freeText.trim()) body.free_text = freeText.trim()
 
-            await call(api.post, '/meal-plans/generate', { body })
+            const draft = await call(api.post, '/meal-plans/generate', { body })
+            onDraft?.(draft, targetPlanId || null)   // 交给页面铺草稿
             reset()
             setOpen(false)
-            onGenerated?.()
         } catch (e) {
-            if (e.status === 400) {
-                setError(t('mealPlans.errNoRecipes'))
-            } else if (e.status === 502) {
-                setError(t('recipes.errAiDown'))
-            } else {
-                setError(e.message || t('recipes.errGenerate'))
-            }
+            if (e.status === 400) setError(e.message || t('mealPlans.errNoRecipes'))
+            else if (e.status === 502) setError(t('recipes.errAiDown'))
+            else setError(e.message || t('recipes.errGenerate'))
         } finally {
-            setSubmitting(false)
+            setBusy(false)
         }
     }
+
+    const planLabel = (p) => (p.plan_type === 'default'
+        ? t('mealPlans.defaultPlanName')
+        : (p.name || t('mealPlans.planFallback', { id: p.id })))
 
     return (
         <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset() }}>
@@ -87,9 +92,7 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                 </DialogHeader>
 
                 <div className="space-y-4">
-                    <p className="text-sm text-slate-500">
-                        {t('mealPlans.aiDesc')}
-                    </p>
+                    <p className="text-sm text-slate-500">{t('mealPlans.aiDesc')}</p>
 
                     <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -119,8 +122,8 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                                 <button
                                     key={m.value}
                                     className={`rounded-md border px-3 py-1.5 text-sm ${meals.includes(m.value)
-                                            ? 'border-slate-900 bg-slate-900 text-white'
-                                            : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                                        ? 'border-slate-900 bg-slate-900 text-white'
+                                        : 'border-slate-300 text-slate-600 hover:bg-slate-50'
                                         }`}
                                     onClick={() => toggleMeal(m.value)}
                                 >
@@ -128,6 +131,37 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                                 </button>
                             ))}
                         </div>
+                    </div>
+
+                    {/* 食材来源 */}
+                    <div>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.ingredientSource')}</label>
+                        <div className="flex gap-2">
+                            <SrcBtn active={ingredientSource === 'any'} onClick={() => setIngredientSource('any')}>
+                                {t('mealPlans.srcAny')}
+                            </SrcBtn>
+                            <SrcBtn active={ingredientSource === 'inventory'} onClick={() => setIngredientSource('inventory')}>
+                                {t('mealPlans.srcInventory')}
+                            </SrcBtn>
+                        </div>
+                        {ingredientSource === 'inventory' && (
+                            <p className="mt-1 text-xs text-slate-400">{t('mealPlans.srcInventoryHint')}</p>
+                        )}
+                    </div>
+
+                    {/* 目标计划(生成前就选好) */}
+                    <div>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.addToPlan')}</label>
+                        <select
+                            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                            value={targetPlanId}
+                            onChange={(e) => setTargetPlanId(e.target.value)}
+                        >
+                            <option value="">{t('mealPlans.newPlan')}</option>
+                            {plans.map((p) => (
+                                <option key={p.id} value={p.id}>{planLabel(p)}</option>
+                            ))}
+                        </select>
                     </div>
 
                     <div>
@@ -145,16 +179,28 @@ export function GenerateMealPlanDialog({ defaultStart, onGenerated }) {
                     <button
                         className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
                         onClick={generate}
-                        disabled={submitting}
+                        disabled={busy}
                     >
-                        {submitting ? (
-                            <><Sparkles className="h-4 w-4 animate-pulse" /> {t('mealPlans.generating')}</>
-                        ) : (
-                            <><Sparkles className="h-4 w-4" /> {t('recipes.generateStart')}</>
-                        )}
+                        {busy
+                            ? (<><Sparkles className="h-4 w-4 animate-pulse" /> {t('mealPlans.generating')}</>)
+                            : (<><Sparkles className="h-4 w-4" /> {t('recipes.generateStart')}</>)}
                     </button>
                 </div>
             </DialogContent>
         </Dialog>
+    )
+}
+
+function SrcBtn({ active, onClick, children }) {
+    return (
+        <button
+            className={`rounded-md border px-3 py-1.5 text-sm ${active
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+            onClick={onClick}
+        >
+            {children}
+        </button>
     )
 }

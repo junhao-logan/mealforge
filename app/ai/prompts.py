@@ -76,6 +76,8 @@ def build_variant_catalog(variants: list[dict]) -> str:
 def build_meal_plan_message(
     variants: list[dict], *, days: int, meals: list[str],
     free_text: str | None = None,
+    inventory_only: bool = False,
+    language: str | None = None,
 ) -> str:
     """拼周计划 prompt: 可用做法(grounding) + 天数 + 餐段 + 一句自由文本。"""
     parts = [
@@ -84,6 +86,14 @@ def build_meal_plan_message(
         f"\n【要求】: 天数 {days}（day_offset 0..{days - 1}）; "
         f"每天餐段: {', '.join(meals)}",
     ]
+    if inventory_only:
+        # "只用库存"模式: 上面清单已过滤为库存能做的; 不够就少排, 别硬凑重复
+        parts.append(
+            "\n【库存约束】: 以上做法都是库存能做的。合理搭配、避免同一道菜过度重复; "
+            "如果做法不足以填满所有餐段, 就少排几餐、留空即可, 不要硬凑。"
+        )
+    if language:
+        parts.append(f"\n【语言】: 计划相关的文字用 {language}。")
     if free_text:
         parts.append(f"\n【补充说明】: {free_text}")
     parts.append("\n请调用 save_meal_plan 工具生成计划。")

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,7 +25,9 @@ from app.meal_plans.schemas import (
     DailySummaryRead,
     EntryCompleteRead,
     MacroSummary,
+    MealPlanCommitRequest,
     MealPlanCreate,
+    MealPlanDraft,
     MealPlanEntryCreate,
     MealPlanEntryRead,
     MealPlanListItem,
@@ -45,32 +47,91 @@ from app.users.models import User
 router = APIRouter(prefix="/meal-plans", tags=["meal-plans"])
 
 
-@router.post("/generate", response_model=MealPlanRead, status_code=201)
+@router.post("/generate", response_model=MealPlanDraft)
 async def generate_meal_plan_endpoint(
     payload: MealPlanGenerateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
-) -> MealPlan:
-    """AI 从已有可见菜谱排布周计划(Week 8)。无可用菜谱 400; AI 失败 502。"""
+) -> dict:
+    """AI 排布周计划 → 返回**草稿**(不落库)。用户预览确认后再调 /generate/commit。
+    无可用菜谱 400; AI 失败 502。阶段A 仅支持 recipe_source='existing'。
+    """
+    if payload.recipe_source == "new":
+        raise HTTPException(400, "AI 现编新菜谱(阶段B)暂未实现, 请用'只用已有菜谱'")
     start = payload.start_date or date.today()
     try:
-        plan = await generate_meal_plan(
+        return await generate_meal_plan(
             db, user, start_date=start, days=payload.days,
             meals=payload.meals, free_text=payload.free_text,
+            ingredient_source=payload.ingredient_source, language=payload.language,
         )
     except EmptyRecipeCatalogError as e:
         raise HTTPException(400, str(e)) from e
     except (AiError, RecipeValidationError) as e:
         raise HTTPException(502, "AI 生成暂时不可用, 请稍后重试") from e
 
+
+@router.post("/generate/commit", response_model=MealPlanRead, status_code=201)
+async def commit_meal_plan_draft(
+    payload: MealPlanCommitRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> MealPlan:
+    """确认草稿 → 把(用户已调整的)餐次**追加**进目标计划。
+    target_plan_id=None → 新建 ai_generated 计划; 否则追加进该计划(校验归属)。
+    校验每个 variant 对用户可见(防越权引用); 追加不清空原有 entries。
+    """
+    start = payload.start_date
+
+    # 1) 目标计划: 追加进已有 / 新建
+    if payload.target_plan_id is not None:
+        plan = await _get_owned_plan(db, payload.target_plan_id, user)
+    else:
+        end = start + timedelta(days=max(e.day_offset for e in payload.entries))
+        plan = MealPlan(
+            user_id=user.id, start_date=start, end_date=end,
+            plan_type="ai_generated",
+        )
+        db.add(plan)
+        await db.flush()
+
+    # 2) 校验所有引用的 variant 对用户可见(global 或本人私有)
+    variant_ids = {e.recipe_variant_id for e in payload.entries}
+    visible = set((await db.execute(
+        select(RecipeVariant.id)
+        .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
+        .where(
+            RecipeVariant.id.in_(variant_ids),
+            or_(Recipe.visibility == "global", Recipe.created_by_user_id == user.id),
+        )
+    )).scalars().all())
+    missing = variant_ids - visible
+    if missing:
+        raise HTTPException(400, f"引用了不可见的菜谱做法: {sorted(missing)}")
+
+    # 3) 逐条追加 entry, 按需撑大计划日期范围
+    affected: set[date] = set()
+    for e in payload.entries:
+        sched = start + timedelta(days=e.day_offset)
+        expand_plan_range(plan, sched)
+        db.add(MealPlanEntry(
+            meal_plan_id=plan.id,
+            scheduled_date=sched,
+            meal_type=e.meal_type,
+            recipe_variant_id=e.recipe_variant_id,
+            servings=e.servings,
+        ))
+        affected.add(sched)
+
+    await db.commit()
+
     loaded = (await db.execute(
         select(MealPlan)
         .where(MealPlan.id == plan.id)
         .options(selectinload(MealPlan.entries))
     )).scalar_one()
-    # 失效计划覆盖的每一天(start..end)
-    await invalidate_summary(redis, user.id, *_dates_in(loaded.start_date, loaded.end_date))
+    await invalidate_summary(redis, user.id, *affected)
     return loaded
 
 

@@ -38,8 +38,10 @@ async def _seed_recipe(db):
     return v
 
 
-async def test_generate_plan_success(db, monkeypatch):
-    """成功: 建 ai_generated 计划 + entries + success 日志(kind=meal_plan)。"""
+async def test_generate_plan_returns_draft_no_persist(db, monkeypatch):
+    """成功: 返回草稿(不落库) + 记 success 日志(kind=meal_plan)。
+    阶段A: 生成只出草稿, 计划/entries 在用户确认(commit)时才建。
+    """
     u = await make_user(db)
     v = await _seed_recipe(db)
 
@@ -47,19 +49,21 @@ async def test_generate_plan_success(db, monkeypatch):
         return _fake_plan(v.id, days=2)
     monkeypatch.setattr(svc, "generate_meal_plan_raw", fake_raw)
 
-    plan = await generate_meal_plan(db, u, start_date=START, days=2, meals=["lunch", "dinner"])
+    draft = await generate_meal_plan(db, u, start_date=START, days=2, meals=["lunch", "dinner"])
 
-    assert plan.plan_type == "ai_generated"
-    assert plan.start_date == START
-    assert plan.end_date == date(2026, 8, 11)     # 2 天
-    assert plan.ai_generation_log_id is not None
+    # 草稿形状
+    assert draft["start_date"] == START
+    assert draft["days"] == 2
+    assert len(draft["entries"]) == 4              # 2 天 × 2 餐
+    e0 = draft["entries"][0]
+    assert e0["recipe_variant_id"] == v.id
+    assert "recipe_name" in e0                     # 带菜名供前端预览
 
-    n_entries = (await db.execute(
-        select(func.count()).select_from(MealPlanEntry).where(
-            MealPlanEntry.meal_plan_id == plan.id)
-    )).scalar()
-    assert n_entries == 4                          # 2 天 × 2 餐
+    # 不落库: 没有 MealPlan / entries
+    assert (await db.execute(select(func.count()).select_from(MealPlan))).scalar() == 0
+    assert (await db.execute(select(func.count()).select_from(MealPlanEntry))).scalar() == 0
 
+    # 记了 success 日志
     log = (await db.execute(select(AiGenerationLog))).scalar_one()
     assert log.status == "success" and log.kind == "meal_plan"
 

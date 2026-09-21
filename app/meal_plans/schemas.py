@@ -118,3 +118,37 @@ class EntryCompleteRead(BaseModel):
     """完成餐次的响应: entry + 本次扣减产生的短缺(I1: 短缺另记,不写回库存)。"""
     entry: MealPlanEntryRead
     shortfalls: list[ShortfallItem]
+
+# ---------- AI 周计划: 草稿(生成) + 提交(确认) ----------
+
+class MealPlanDraftEntry(BaseModel):
+    """草稿里的一条餐次(阶段A: 只引用已有 variant)。带菜名供前端预览。"""
+    day_offset: int
+    meal_type: str
+    recipe_variant_id: int
+    servings: Decimal = Decimal("1")
+    recipe_name: str
+    variant_name: str | None = None
+
+
+class MealPlanDraft(BaseModel):
+    """AI 生成的草稿: 不落库, 前端预览/调整后再 commit。"""
+    start_date: date
+    days: int
+    meals: list[str]
+    entries: list[MealPlanDraftEntry]
+
+
+class MealPlanCommitEntry(BaseModel):
+    """确认时提交的一条餐次(用户可能已在预览里增删改)。"""
+    day_offset: int = Field(ge=0)
+    meal_type: str
+    recipe_variant_id: int
+    servings: Decimal = Field(default=Decimal("1"), gt=0)
+
+
+class MealPlanCommitRequest(BaseModel):
+    """确认草稿 → 追加进目标计划(target_plan_id=None 则新建 ai_generated 计划)。"""
+    target_plan_id: int | None = None
+    start_date: date
+    entries: list[MealPlanCommitEntry] = Field(min_length=1)
