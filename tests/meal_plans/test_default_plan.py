@@ -52,4 +52,4 @@ async def test_regular_plan_still_deletable(api_client):
     plan_id = created.json()["id"]
 
     resp = await client.delete(f"/meal-plans/{plan_id}")
-    assert resp.status_code == 204, resp.text
+    assert resp.status_code == 200, resp.text

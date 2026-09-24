@@ -28,6 +28,7 @@ from app.meal_plans.schemas import (
     CalendarEntryRead,
     DailySummaryRead,
     EntryCompleteRead,
+    EntryUncompleteRead,
     MacroSummary,
     MealPlanCommitRequest,
     MealPlanCreate,
@@ -37,6 +38,7 @@ from app.meal_plans.schemas import (
     MealPlanListItem,
     MealPlanRead,
     QuickLogCreate,
+    RestockResult,
     ShortfallItem,
 )
 from app.meal_plans.services import (
@@ -394,21 +396,44 @@ async def get_plan(
     })
 
 
-@router.delete("/{plan_id:int}", status_code=204)
+@router.delete("/{plan_id:int}", response_model=RestockResult)
 async def delete_plan(
     plan_id: int,
+    restock: bool = Query(False, description="计划里已完成的餐次是否退回库存(A5)"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-) -> None:
-    plan = await _get_owned_plan(db, plan_id, user)
+) -> dict:
+    """删除计划。restock=true 时先把其中已完成餐次扣掉的库存退回原批次(同事务)。
+    前端在计划里有已完成餐次时统一问一次用户(A5)。
+    """
+    plan = await _get_owned_plan(db, plan_id, user, with_entries=True)
     # 默认 plan(Quick Log)是系统级收纳计划, 不可删除(前端也不显示删除按钮, 这里硬兜底)
     if plan.plan_type == "default":
         raise HTTPException(400, "默认计划(Quick Log)不可删除")
     days = _dates_in(plan.start_date, plan.end_date)   # 删前记下覆盖的天
+
+    losses: list[dict] = []
+    if restock:
+        # 必须在删之前退: 删 entry 后流水的 source_entry_id 会被置空, 就找不到了
+        for e in plan.entries:
+            if e.is_completed:
+                losses += await inventory_services.restock_for_entry(db, user.id, e)
+    losses = _merge_losses(losses)
+    unrestorable = await inventory_services.describe_losses(db, losses)
+
     await db.delete(plan)
     await db.commit()
     await invalidate_summary(redis, user.id, *days)
+    return {"unrestorable": unrestorable}
+
+
+def _merge_losses(losses: list[dict]) -> list[dict]:
+    """多个餐次退不回去的部分按食材合并。"""
+    merged: dict[int, Decimal] = {}
+    for x in losses:
+        merged[x["ingredient_id"]] = merged.get(x["ingredient_id"], Decimal("0")) + x["amount"]
+    return [{"ingredient_id": i, "amount": a} for i, a in sorted(merged.items())]
 
 
 # ---------- 计划里的 entry ----------
@@ -446,22 +471,30 @@ async def add_entry(
     return entry
 
 
-@router.delete("/{plan_id:int}/entries/{entry_id}", status_code=204)
+@router.delete("/{plan_id:int}/entries/{entry_id}", response_model=RestockResult)
 async def delete_entry(
     plan_id: int,
     entry_id: int,
+    restock: bool = Query(False, description="已完成的餐次是否把扣掉的库存退回(A5)"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-) -> None:
-    plan = await _get_owned_plan(db, plan_id, user)
-    entry = await db.get(MealPlanEntry, entry_id)
-    if entry is None or entry.meal_plan_id != plan.id:
-        raise HTTPException(404, f"餐次 id={entry_id} 不存在")
+) -> dict:
+    """删除餐次。已完成的餐次由前端问用户: 删除并退回库存(restock=true) / 只删记录。
+    退回必须在删除之前做(删后流水的 source_entry_id 置空)。
+    """
+    entry = await _get_owned_entry(db, plan_id, entry_id, user)
     affected_date = entry.scheduled_date          # 删前记下日期(删后取不到)
+
+    losses: list[dict] = []
+    if restock and entry.is_completed:
+        losses = await inventory_services.restock_for_entry(db, user.id, entry)
+    unrestorable = await inventory_services.describe_losses(db, losses)
+
     await db.delete(entry)
     await db.commit()
     await invalidate_summary(redis, user.id, affected_date)  # 失效该天
+    return {"unrestorable": unrestorable}
 
 
 @router.patch("/{plan_id:int}/entries/{entry_id}/complete", response_model=EntryCompleteRead)
@@ -498,32 +531,36 @@ async def complete_entry(
     )
 
 
-@router.patch("/{plan_id:int}/entries/{entry_id}/uncomplete", response_model=MealPlanEntryRead)
+@router.patch(
+    "/{plan_id:int}/entries/{entry_id}/uncomplete", response_model=EntryUncompleteRead
+)
 async def uncomplete_entry(
     plan_id: int,
     entry_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-) -> MealPlanEntry:
+) -> dict:
     """撤销完成 + 把完成时扣的库存退回原批次(同事务, I2)。
-    幂等: 未完成的 entry 直接返回, 不重复回补。
+    幂等: 未完成的 entry 直接返回, 不重复回补。原批次已删的部分退不回去, 在响应里提示(A5)。
     """
     entry = await _get_owned_entry(db, plan_id, entry_id, user)
 
     if not entry.is_completed:
-        return entry                      # 本就未完成, 无需回补
+        return {"entry": entry, "unrestorable": []}   # 本就未完成, 无需回补
 
     entry.is_completed = False
     entry.completed_at = None
 
-    await inventory_services.restock_for_entry(db, user.id, entry)
+    losses = await inventory_services.restock_for_entry(db, user.id, entry)
+    unrestorable = await inventory_services.describe_losses(db, losses)
 
     await db.commit()
     await db.refresh(entry)
     await invalidate_summary(redis, user.id, entry.scheduled_date)  # 失效该天
 
-    return entry
+    return {"entry": MealPlanEntryRead.model_validate(entry), "unrestorable": unrestorable}
+
 
 @router.put("/{plan_id:int}/entries/{entry_id}/picks", status_code=204)
 async def set_entry_picks(

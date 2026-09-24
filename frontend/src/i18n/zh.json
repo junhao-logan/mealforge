@@ -33,6 +33,11 @@
     "cancel": "取消"
   },
   "meal": {
+    "deleteCompletedTitle": "删除已完成的餐次",
+    "deleteCompletedMsg": "这顿饭已经标记完成，食材已从库存扣除。要退回库存吗？",
+    "deleteRecordOnly": "只删记录",
+    "deleteAndRestock": "删除并退回库存",
+    "restockLost": "以下食材没法退回库存（原批次已被删除）：{{list}}",
     "breakfast": "早餐",
     "lunch": "午餐",
     "dinner": "晚餐",
@@ -207,6 +212,9 @@
     "generateStart": "开始生成"
   },
   "mealPlans": {
+    "errPlanName": "请输入计划名称",
+    "deletePlanTitle": "删除计划",
+    "deletePlanCompletedMsg": "「{{name}}」里有 {{count}} 顿已完成的餐次，食材已从库存扣除。删除时要退回库存吗？",
     "title": "餐计划",
     "day": "天",
     "week": "周",

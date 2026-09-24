@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -36,11 +36,14 @@ async def create_inventory_item(
 
 @router.get("", response_model=list[InventoryItemRead])
 async def list_inventory(
+    include_empty: bool = Query(False, description="是否包含已用到 0 的批次(A6 默认隐藏)"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[InventoryItemRead]:
-    """列出我的库存(FEFO 序), 附带临期状态(I4, 查询时算)。"""
-    items = await services.list_inventory_items(db, user.id)
+    """列出我的库存(FEFO 序), 附带临期状态(I4, 查询时算)。
+    A6: 用到 0 的批次保留在数据库(撤销完成 / 删餐退回原批次要用), 默认不返回。
+    """
+    items = await services.list_inventory_items(db, user.id, include_empty=include_empty)
     settings = get_settings()
     today = date.today()
 

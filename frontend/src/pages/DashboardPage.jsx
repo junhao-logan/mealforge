@@ -7,7 +7,9 @@ import { Link } from 'react-router'
 import { MacroCard } from '@/components/dashboard/MacroCard'
 import { MealEntryCard } from '@/components/mealplan/MealEntryCard'
 import { useApi } from '@/hooks/useApi'
+import { useEntryDelete } from '@/hooks/useEntryDelete'
 import { api } from '@/lib/api'
+import { reportRestockLosses } from '@/lib/restock'
 import { toISO } from '@/lib/dateRange'
 
 export function DashboardPage() {
@@ -68,21 +70,18 @@ export function DashboardPage() {
 
     async function handleUncomplete(entry) {
         try {
-            await call(api.patch, `/meal-plans/${entry.plan_id}/entries/${entry.id}/uncomplete`)
+            const res = await call(api.patch, `/meal-plans/${entry.plan_id}/entries/${entry.id}/uncomplete`)
+            reportRestockLosses(res, t)
             await reload()
         } catch (e) {
             alert(e.message || t('meal.uncompleteFailed'))
         }
     }
 
-    async function handleDelete(entry) {
-        if (!confirm(t('meal.confirmDelete'))) return
-        try {
-            await call(api.del, `/meal-plans/${entry.plan_id}/entries/${entry.id}`)
-            await reload()
-        } catch (e) {
-            alert(e.message || t('common.deleteFailed'))
-        }
+    // A5: 已完成的餐次删除时问要不要退回库存(见 useEntryDelete)
+    const { requestDelete, dialog: deleteDialog } = useEntryDelete(reload)
+    function handleDelete(entry) {
+        requestDelete(entry, t('meal.confirmDelete'))
     }
 
     if (loading) return <State text={t('common.loading')} />
@@ -90,6 +89,7 @@ export function DashboardPage() {
 
     return (
         <div>
+            {deleteDialog}
             {/* 标题 */}
             <div className="mb-6">
                 <h1 className="text-2xl font-bold text-slate-900">{t('nav.dashboard')}</h1>

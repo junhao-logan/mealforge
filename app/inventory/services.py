@@ -74,7 +74,9 @@ def compute_expiry_status(expires_at: date | None, today: date, warning_days: in
     return "expiring" if days_left <= warning_days else None
 
 
-async def list_inventory_items(db: AsyncSession, user_id) -> list[InventoryItem]:
+async def list_inventory_items(
+    db: AsyncSession, user_id, *, include_empty: bool = False,
+) -> list[InventoryItem]:
     """列出用户库存, FEFO 序(先过期先扣的顺序 = 展示顺序)。
     expires_at NULL 排最后; 同过期日按 purchased_at 先买先前(I1)。
     """
@@ -84,9 +86,12 @@ async def list_inventory_items(db: AsyncSession, user_id) -> list[InventoryItem]
         .order_by(
             InventoryItem.expires_at.asc().nulls_last(),
             InventoryItem.purchased_at.asc().nulls_last(),
-            InventoryItem.id.asc(),      
+            InventoryItem.id.asc(),
         )
     )
+    if not include_empty:
+        # A6: 用到 0 的批次保留在库里(退回原批次要用, I1), 但默认不返回
+        stmt = stmt.where(InventoryItem.quantity_grams > 0)
     return list((await db.execute(stmt)).scalars().all())
 
 async def deduct_for_entry(
@@ -175,17 +180,20 @@ async def deduct_for_entry(
     return shortfalls
 
 
-async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> None:
-    """撤销完成餐次 → 把该 entry 完成时扣掉的库存原样退回原批次(I2)。
+async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> list[dict]:
+    """撤销完成 / 删除已完成餐次 → 把该 entry 完成时扣掉的库存原样退回原批次(I2)。
 
     幂等/健壮做法: **按 source_entry_id 净额回补**, 而非逐条反转。
-    · 对该 entry 的所有流水按 (批次) 聚合 delta_grams:
+    · 对该 entry 的所有流水按 (批次, 食材) 聚合 delta_grams:
       完成时扣减为负、之前撤销回补为正, 净额 = 当前仍欠该批次的量。
     · 净额为负(仍有未回补的消耗)才回补, 回补 = -净额(正); 已净平则跳过
       —— 这样 完成→撤销→再完成→再撤销 循环也不会重复回补。
-    · 原批次已被删除(inventory_item_id 置空)的无法回补, 跳过。
-    · 每个回补批次记一条反向流水(+delta, reason='meal_reversal')。
-    不 commit —— 由 router 与 entry.is_completed 同事务提交。
+    · 零余量批次被保留(I1 / A6), 所以扣光的批次也能退回原批次(保留原过期日 / 储存区)。
+    · 原批次已被手动删除(inventory_item_id 置空)的**退不回去**:
+      不建新批次(流水里没有过期日 / 储存区), 记一条 reason='reversal_lost' 的冲销流水
+      让净额归零(下次不会重复报), 并把这部分返回给调用方提示用户(A5)。
+    不 commit —— 由 router 同事务提交。
+    返回: 退不回去的部分 [{"ingredient_id", "amount"}], 按食材合并。
     """
     rows = (await db.execute(
         select(
@@ -200,20 +208,32 @@ async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> 
         )
     )).all()
 
+    lost: dict[int, Decimal] = {}
     for item_id, ingredient_id, net in rows:
         give_back = -(net or Decimal("0"))     # 净消耗为负 → 回补为正
         if give_back <= 0:
             continue                            # 已净平(撤销过)或非消耗, 跳过
-        if item_id is None:
-            continue                            # 原批次已删, 无法回补
 
-        # 行锁取原批次, += 回补(零余量批次被保留正是为了这一步, I1)
-        batch = (await db.execute(
-            select(InventoryItem)
-            .where(InventoryItem.id == item_id)
-            .with_for_update()
-        )).scalar_one_or_none()
+        batch = None
+        if item_id is not None:
+            # 行锁取原批次, += 回补
+            batch = (await db.execute(
+                select(InventoryItem)
+                .where(InventoryItem.id == item_id)
+                .with_for_update()
+            )).scalar_one_or_none()
+
         if batch is None:
+            # 原批次已删: 退不回去 → 冲销流水(不动库存), 记入返回
+            lost[ingredient_id] = lost.get(ingredient_id, Decimal("0")) + give_back
+            db.add(InventoryTransaction(
+                user_id=user_id,
+                ingredient_id=ingredient_id,
+                inventory_item_id=None,
+                delta_grams=give_back,
+                reason="reversal_lost",
+                source_entry_id=entry.id,
+            ))
             continue
 
         batch.quantity_grams += give_back
@@ -227,6 +247,27 @@ async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> 
         ))
 
     await db.flush()
+    return [{"ingredient_id": i, "amount": a} for i, a in sorted(lost.items())]
+
+
+async def describe_losses(db: AsyncSession, losses: list[dict]) -> list[dict]:
+    """给「退不回去」的条目补上食材名和规范单位, 供前端提示。"""
+    if not losses:
+        return []
+    ings = {
+        i.id: i for i in (await db.execute(
+            select(Ingredient).where(Ingredient.id.in_({x["ingredient_id"] for x in losses}))
+        )).scalars().all()
+    }
+    return [
+        {
+            **x,
+            "name": ings[x["ingredient_id"]].name if x["ingredient_id"] in ings else None,
+            "unit": (ings[x["ingredient_id"]].nutrition_basis_unit or "g")
+            if x["ingredient_id"] in ings else "g",
+        }
+        for x in losses
+    ]
 
 
 async def get_owned_item(db: AsyncSession, user_id, item_id: int) -> InventoryItem | None:

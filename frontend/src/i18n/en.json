@@ -33,6 +33,11 @@
     "cancel": "Cancel"
   },
   "meal": {
+    "deleteCompletedTitle": "Delete a completed meal",
+    "deleteCompletedMsg": "This meal is marked as done, so its ingredients were already taken out of your inventory. Should they go back?",
+    "deleteRecordOnly": "Delete record only",
+    "deleteAndRestock": "Delete and return to inventory",
+    "restockLost": "Some ingredients couldn't be returned because their original batch was deleted: {{list}}",
     "breakfast": "Breakfast",
     "lunch": "Lunch",
     "dinner": "Dinner",
@@ -207,6 +212,9 @@
     "generateStart": "Start generating"
   },
   "mealPlans": {
+    "errPlanName": "Please enter a plan name",
+    "deletePlanTitle": "Delete plan",
+    "deletePlanCompletedMsg": "\"{{name}}\" has {{count}} completed meal(s) whose ingredients were taken out of your inventory. Return them when deleting?",
     "title": "Meal Plans",
     "day": "Day",
     "week": "Week",

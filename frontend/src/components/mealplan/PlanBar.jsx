@@ -4,12 +4,14 @@ import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { RestockChoiceDialog } from '@/components/mealplan/RestockChoiceDialog'
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 import { toISO } from '@/lib/dateRange'
+import { reportRestockLosses } from '@/lib/restock'
 
 export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
     const { t } = useTranslation()
@@ -108,25 +110,60 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
 }
 
 // 删除按钮(选中某plan后显示在右上角)—— 独立导出
+// A5: 计划里有已完成的餐次 → 统一问一次要不要退回库存; 没有就普通确认
 export function DeletePlanButton({ plan, onDeleted }) {
     const { t } = useTranslation()
     const { call } = useApi()
-    async function del() {
-        const planName = plan.name || t('mealPlans.unnamed')
-        if (!confirm(t('mealPlans.confirmDeletePlan', { name: planName }))) return
+    const [completedCount, setCompletedCount] = useState(0)   // >0 时弹退回选择
+    const [busy, setBusy] = useState(false)
+    const planName = plan.name || t('mealPlans.unnamed')
+
+    async function doDelete(restock) {
         try {
-            await call(api.del, `/meal-plans/${plan.id}`)
+            setBusy(true)
+            const res = await call(api.del, `/meal-plans/${plan.id}`, {
+                params: restock ? { restock: true } : undefined,
+            })
+            setCompletedCount(0)
+            reportRestockLosses(res, t)
             onDeleted?.()
         } catch (e) {
             alert(e.message || t('common.deleteFailed'))
+        } finally {
+            setBusy(false)
         }
     }
+
+    async function del() {
+        let count = 0
+        try {
+            const detail = await call(api.get, `/meal-plans/${plan.id}`)
+            count = (detail?.entries || []).filter((e) => e.is_completed).length
+        } catch (e) {
+            alert(e.message || t('common.loadFailed'))
+            return
+        }
+        if (count > 0) { setCompletedCount(count); return }
+        if (!confirm(t('mealPlans.confirmDeletePlan', { name: planName }))) return
+        doDelete(false)
+    }
+
     return (
-        <button
-            className="rounded-md border border-red-200 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
-            onClick={del}
-        >
-            {t('mealPlans.deletePlan')}
-        </button>
+        <>
+            <button
+                className="rounded-md border border-red-200 px-3 py-1 text-sm text-red-600 hover:bg-red-50"
+                onClick={del}
+            >
+                {t('mealPlans.deletePlan')}
+            </button>
+            <RestockChoiceDialog
+                open={completedCount > 0}
+                title={t('mealPlans.deletePlanTitle')}
+                message={t('mealPlans.deletePlanCompletedMsg', { name: planName, count: completedCount })}
+                busy={busy}
+                onChoose={doDelete}
+                onCancel={() => setCompletedCount(0)}
+            />
+        </>
     )
 }

@@ -114,6 +114,25 @@ class ShortfallItem(BaseModel):
     shortfall_grams: Decimal
 
 
+class RestockLoss(BaseModel):
+    """退回库存时退不回去的部分(原批次已被删除, A5)。"""
+    ingredient_id: int
+    name: str | None
+    unit: str
+    amount: Decimal
+
+
+class RestockResult(BaseModel):
+    """删除餐次 / 计划的响应: 退不回去的部分(没选退回或没有可退的就是空列表)。"""
+    unrestorable: list[RestockLoss] = []
+
+
+class EntryUncompleteRead(BaseModel):
+    """撤销完成的响应: entry + 退不回去的部分(A5)。"""
+    entry: MealPlanEntryRead
+    unrestorable: list[RestockLoss] = []
+
+
 class EntryCompleteRead(BaseModel):
     """完成餐次的响应: entry + 本次扣减产生的短缺(I1: 短缺另记,不写回库存)。"""
     entry: MealPlanEntryRead

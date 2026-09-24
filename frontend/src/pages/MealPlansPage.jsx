@@ -10,7 +10,9 @@ import { GenerateMealPlanDialog } from '@/components/mealplan/GenerateMealPlanDi
 import { MealEntryCard } from '@/components/mealplan/MealEntryCard'
 import { DeletePlanButton, PlanBar } from '@/components/mealplan/PlanBar'
 import { useApi } from '@/hooks/useApi'
+import { useEntryDelete } from '@/hooks/useEntryDelete'
 import { api } from '@/lib/api'
+import { reportRestockLosses } from '@/lib/restock'
 import {
     addDays, fullDate, isToday, shortDate, toISO, weekdayLabel, weekDays, weekStart,
 } from '@/lib/dateRange'
@@ -144,27 +146,25 @@ export function MealPlansPage() {
 
     async function handleUncomplete(entry) {
         try {
-            await call(api.patch, `/meal-plans/${entry.plan_id}/entries/${entry.id}/uncomplete`)
+            const res = await call(api.patch, `/meal-plans/${entry.plan_id}/entries/${entry.id}/uncomplete`)
+            reportRestockLosses(res, t)
             await reload()
         } catch (e) {
             alert(e.message || t('meal.uncompleteFailed'))
         }
     }
 
-    async function handleDelete(entry) {
-        if (!confirm(t('mealPlans.confirmDeleteEntry'))) return
-        try {
-            await call(api.del, `/meal-plans/${entry.plan_id}/entries/${entry.id}`)
-            await reload()
-        } catch (e) {
-            alert(e.message || t('common.deleteFailed'))
-        }
+    // A5: 已完成的餐次删除时问要不要退回库存(见 useEntryDelete)
+    const { requestDelete, dialog: deleteDialog } = useEntryDelete(reload)
+    function handleDelete(entry) {
+        requestDelete(entry, t('mealPlans.confirmDeleteEntry'))
     }
 
     const draftProps = { draftByDate, onDraftDelete }
 
     return (
         <div className="pb-20">
+            {deleteDialog}
             {/* 顶部: 标题 + 视图切换 + AI 生成 */}
             <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
                 <h1 className="text-2xl font-bold text-slate-900">{t('mealPlans.title')}</h1>
