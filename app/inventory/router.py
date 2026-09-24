@@ -10,6 +10,7 @@ from app.auth.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.dates import get_today
+from app.ingredients.access import ingredient_briefs
 from app.inventory import services
 from app.inventory.reservations import compute_reservations
 from app.inventory.schemas import (
@@ -47,14 +48,17 @@ async def list_inventory(
     """
     items = await services.list_inventory_items(db, user.id, include_empty=include_empty)
     settings = get_settings()
+    briefs = await ingredient_briefs(db, [item.ingredient_id for item in items])
 
-    # ORM 对象 → Read schema, 并填入算出来的 expiry_status(非存储字段)
+    # ORM 对象 → Read schema, 并填入算出来的 expiry_status 与食材名 / 规范单位(非存储字段)
     return [
         InventoryItemRead.model_validate(item).model_copy(
             update={
                 "expiry_status": services.compute_expiry_status(
                     item.expires_at, today, settings.inventory_expiry_warning_days
-                )
+                ),
+                "ingredient_name": briefs.get(item.ingredient_id, {}).get("name"),
+                "unit": briefs.get(item.ingredient_id, {}).get("unit", "g"),
             }
         )
         for item in items

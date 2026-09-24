@@ -17,6 +17,7 @@ from pathlib import Path
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.database import SessionLocal
+from app.ingredients.access import normalize_name  # lower + strip + 折叠空格(全项目共用)
 from app.ingredients.models import Ingredient
 
 # --- 路径 (S2: 下完 CSV 核对真实目录名) ---
@@ -35,10 +36,6 @@ NUTRIENT_CARB = 1005          # Carbohydrate, by difference
 ENERGY_PRIORITY = (1008, 2048, 2047)  # D2; 三者皆 kcal, kJ 的(1062/268)天然排除
 MACRO_IDS = {NUTRIENT_PROTEIN, NUTRIENT_FAT, NUTRIENT_CARB}
 ENERGY_IDS = set(ENERGY_PRIORITY)
-
-
-def normalize_name(name: str) -> str:
-    return " ".join(name.lower().split())  # lower + strip + 折叠空格
 
 
 def load_manifest() -> dict[str, dict]:

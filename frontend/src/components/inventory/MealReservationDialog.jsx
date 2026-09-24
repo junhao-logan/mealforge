@@ -5,7 +5,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { mealTitle } from '@/components/inventory/IngredientGroupCard'
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -13,6 +12,7 @@ import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 import { daysUntil } from '@/lib/expiry'
 import { fefoCompare, fmtAmount, ZONE_LABEL_KEYS, zoneOf } from '@/lib/inventoryView'
+import { mealTitle } from '@/lib/meals'
 
 export function MealReservationDialog({ entry, reservations, items, onClose, onSaved }) {
     const { t } = useTranslation()

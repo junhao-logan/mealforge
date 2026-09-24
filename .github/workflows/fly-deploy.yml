@@ -34,13 +34,41 @@ jobs:
       - name: Set up Python
         run: uv python install
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        # --locked: uv.lock 与 pyproject.toml 不一致就失败, 保证 CI 装的就是锁定的版本
+        run: uv sync --locked --all-extras --dev
+      - name: Lint
+        run: uv run ruff check .
+      - name: Migrations apply cleanly and match models
+        # 测试用 create_all 建表, 不经过迁移; 这里单独验证迁移链能从零跑到 head,
+        # 且模型与迁移没有漂移(alembic check 发现差异即失败)。之后测试会 drop_all 重建, 互不影响
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
       - name: Run tests
         run: uv run pytest tests/ --cov --cov-fail-under=75
 
-  # ---- Job 2: 部署(仅当 test 通过) ----
+  # ---- Job 1b: 前端 lint + 构建(前端由 Cloudflare Pages 部署, 这里只做质量门禁) ----
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  # ---- Job 2: 部署(仅当 test 与 frontend 都通过) ----
   deploy:
-    needs: test          # 关键: 依赖 test job, 测试红了这里不跑
+    needs: [test, frontend]   # 关键: 任一门禁红了这里不跑
     runs-on: ubuntu-latest
     concurrency:         # 防止两次 push 同时部署互相踩踏
       group: deploy-production

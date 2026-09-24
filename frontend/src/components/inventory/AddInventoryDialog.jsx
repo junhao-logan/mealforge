@@ -26,8 +26,7 @@ const ZONES = [
 // 数字去掉多余小数(220.0 → 220, 1.00 → 1)
 function fmtNum(v) {
     if (v === null || v === undefined) return ''
-    const n = Number(v)
-    return Number.isInteger(n) ? String(n) : String(n)
+    return String(Number(Number(v).toFixed(2)))   // 最多两位小数、去掉多余的 0(与 fmtAmount 一致)
 }
 
 export function AddInventoryDialog({ onAdded }) {
@@ -47,14 +46,9 @@ export function AddInventoryDialog({ onAdded }) {
 
     return (
         <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
-            <DialogTrigger asChild>
-                <span
-                    role="button"
-                    tabIndex={0}
-                    className="inline-flex cursor-pointer rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                >
-                    {t('inventory.addStock')}
-                </span>
+            {/* Base UI 的 Trigger 本身渲染成原生 <button>: 样式直接写在上面, 不再包一层 span(旧的 asChild 写法在 Base UI 里无效) */}
+            <DialogTrigger className="inline-flex cursor-pointer rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+                {t('inventory.addStock')}
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>

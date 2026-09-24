@@ -13,17 +13,14 @@ import { useApi } from '@/hooks/useApi'
 import { useEntryDelete } from '@/hooks/useEntryDelete'
 import { api } from '@/lib/api'
 import { reportRestockLosses } from '@/lib/restock'
+import { parseDate } from '@/lib/inventoryView'
+import { MEAL_OPTIONS, mealLabel } from '@/lib/meals'
 import {
     addDays, fullDate, isToday, shortDate, toISO, weekdayLabel, weekDays, weekStart,
 } from '@/lib/dateRange'
 
-const MEAL_KEY = {
-    breakfast: 'meal.breakfast', lunch: 'meal.lunch', dinner: 'meal.dinner', snack: 'meal.snack',
-}
-
-function parseISO(s) {
-    return new Date(s + 'T00:00:00')
-}
+// 'YYYY-MM-DD' → 本地日期(与库存页共用 inventoryView.parseDate)
+const parseISO = parseDate
 
 export function MealPlansPage() {
     const { t } = useTranslation()
@@ -36,6 +33,7 @@ export function MealPlansPage() {
     const [plans, setPlans] = useState([])
     const [activePlanId, setActivePlanId] = useState(null)
     const [addDate, setAddDate] = useState(null)
+    const [addMeal, setAddMeal] = useState(null)   // 天视图从某餐段点「添加」时预选该餐段
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
@@ -46,8 +44,10 @@ export function MealPlansPage() {
     // 当前视图的日期范围
     const isWeek = granularity === 'week'
     const days = weekDays(anchor)
-    const rangeStart = isWeek ? toISO(days[0]) : toISO(dayAnchor)
-    const rangeEnd = isWeek ? toISO(days[6]) : toISO(dayAnchor)
+    // 范围字符串直接从 anchor 算, 不从 days 数组取: days 会传给子组件, React Compiler 视其为
+    // 「之后可能被修改」, 导致 reload 的 useCallback 无法保留(整个组件跳过编译优化)
+    const rangeStart = toISO(isWeek ? weekStart(anchor) : dayAnchor)
+    const rangeEnd = toISO(isWeek ? addDays(weekStart(anchor), 6) : dayAnchor)
 
     const reload = useCallback(async () => {
         try {
@@ -56,7 +56,7 @@ export function MealPlansPage() {
                 call(api.get, '/meal-plans/entries', {
                     params: { start: rangeStart, end: rangeEnd },
                 }),
-                call(api.get, '/meal-plans'),
+                call(api.get, '/meal-plans', { params: { limit: 100 } }),   // 默认只取 20 个
             ])
             setEntries(data || [])
             setPlans(planList || [])
@@ -241,14 +241,14 @@ export function MealPlansPage() {
                     <WeekView
                         days={days} entries={visibleEntries} orientation={orientation}
                         onComplete={handleComplete} onUncomplete={handleUncomplete} onDelete={handleDelete}
-                        onAdd={(iso) => setAddDate(iso)}
+                        onAdd={(iso, meal) => { setAddDate(iso); setAddMeal(meal || null) }}
                         {...draftProps}
                     />
                 ) : (
                     <DayView
                         date={dayAnchor} entries={visibleEntries}
                         onComplete={handleComplete} onUncomplete={handleUncomplete} onDelete={handleDelete}
-                        onAdd={(iso) => setAddDate(iso)}
+                        onAdd={(iso, meal) => { setAddDate(iso); setAddMeal(meal || null) }}
                         {...draftProps}
                     />
                 )
@@ -259,6 +259,7 @@ export function MealPlansPage() {
                 date={addDate}
                 plans={plans}
                 defaultPlanId={activePlanId}
+                defaultMealType={addMeal}
                 onClose={() => setAddDate(null)}
                 onAdded={reload}
             />
@@ -315,7 +316,7 @@ function DraftEntryCard({ entry, onDelete }) {
             <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                     <span className="text-xs font-medium text-green-600">
-                        {(MEAL_KEY[entry.meal_type] ? t(MEAL_KEY[entry.meal_type]) : entry.meal_type)}
+                        {mealLabel(entry.meal_type, t)}
                         {' · '}{t('mealPlans.draftBadge')}
                     </span>
                     <div className="truncate font-medium text-slate-900">
@@ -412,12 +413,7 @@ function WeekView({ days, entries, orientation, onComplete, onUncomplete, onDele
 }
 
 // ── 天视图: 按早/午/晚/加餐分 block ──
-const MEAL_SECTIONS = [
-    { type: 'breakfast', labelKey: 'meal.breakfast' },
-    { type: 'lunch', labelKey: 'meal.lunch' },
-    { type: 'dinner', labelKey: 'meal.dinner' },
-    { type: 'snack', labelKey: 'meal.snack' },
-]
+const MEAL_SECTIONS = MEAL_OPTIONS.map((m) => ({ type: m.value, labelKey: m.labelKey }))
 
 function DayView({ date, entries, onComplete, onUncomplete, onDelete, onAdd,
     draftByDate, onDraftDelete }) {
@@ -439,7 +435,7 @@ function DayView({ date, entries, onComplete, onUncomplete, onDelete, onAdd,
                             <h3 className="font-semibold text-slate-800">{t(sec.labelKey)}</h3>
                             <button
                                 className="text-sm text-slate-400 hover:text-slate-700"
-                                onClick={() => onAdd(iso)}
+                                onClick={() => onAdd(iso, sec.type)}
                             >
                                 {t('mealPlans.add')}
                             </button>

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -49,6 +49,7 @@ from app.meal_plans.services import (
 )
 from app.nutrition.models import UserNutritionGoal
 from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
+from app.recipes.services import recipe_visible_to
 from app.users.models import User
 
 router = APIRouter(prefix="/meal-plans", tags=["meal-plans"])
@@ -105,18 +106,9 @@ async def commit_meal_plan_draft(
 
     # 2) 校验已有做法的 variant 对用户可见(global 或本人私有)
     existing_ids = {e.recipe_variant_id for e in payload.entries if e.new_recipe is None}
-    if existing_ids:
-        visible = set((await db.execute(
-            select(RecipeVariant.id)
-            .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
-            .where(
-                RecipeVariant.id.in_(existing_ids),
-                or_(Recipe.visibility == "global", Recipe.created_by_user_id == user.id),
-            )
-        )).scalars().all())
-        missing = existing_ids - visible
-        if missing:
-            raise HTTPException(400, f"引用了不可见的菜谱做法: {sorted(missing)}")
+    missing = await _invisible_variants(db, user, existing_ids)
+    if missing:
+        raise HTTPException(400, f"引用了不可见的菜谱做法: {sorted(missing)}")
 
     # 3) 逐条追加 entry; new_recipe → 现在才落库(去重食材 + 建菜谱), 按需撑大日期范围
     affected: set[date] = set()
@@ -180,14 +172,38 @@ def _sorted_entries(plan: MealPlan) -> list[MealPlanEntry]:
 
 
 async def _get_owned_entry(
-    db: AsyncSession, plan_id: int, entry_id: int, user: User
+    db: AsyncSession, plan_id: int, entry_id: int, user: User, *, lock: bool = False
 ) -> MealPlanEntry:
-    """取 entry 并校验归属(经 plan 关联 user)。"""
+    """取 entry 并校验归属(经 plan 关联 user)。
+
+    lock=True: 行锁(SELECT ... FOR UPDATE)。完成 / 撤销完成用 —— 双击或并发请求时,
+    第二个请求会等第一个提交后再读到最新的 is_completed, 不会重复扣库存 / 重复回补。
+    """
     plan = await _get_owned_plan(db, plan_id, user)
-    entry = await db.get(MealPlanEntry, entry_id)
+    stmt = select(MealPlanEntry).where(MealPlanEntry.id == entry_id)
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    entry = (await db.execute(stmt)).scalar_one_or_none()
     if entry is None or entry.meal_plan_id != plan.id:
         raise HTTPException(404, f"餐次 id={entry_id} 不存在")
     return entry
+
+
+async def _invisible_variants(db: AsyncSession, user: User, ids) -> set[int]:
+    """返回 ids 里当前用户**看不见**(不存在, 或是别人的私有菜谱)的 variant id。
+
+    排餐的三个入口(手动加餐 / quick-log / AI 确认)共用 —— 之前前两个只查存在,
+    能把别人私有菜谱排进自己的计划, 菜名和营养随后出现在自己的日历和每日汇总里。
+    """
+    ids = {i for i in ids if i is not None}
+    if not ids:
+        return set()
+    visible = set((await db.execute(
+        select(RecipeVariant.id)
+        .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
+        .where(RecipeVariant.id.in_(ids), recipe_visible_to(user.id))
+    )).scalars().all())
+    return ids - visible
 
 
 # ---------- 计划 CRUD ----------
@@ -251,6 +267,10 @@ async def list_entries_in_range(
     一次查询带出菜名(join recipe/variant), 前端各视图(天/周/月)共用。
     无 N+1: 单查询 join。按日期→餐次序→sort_order 排序。
     """
+    if end < start:
+        raise HTTPException(422, "end 不能早于 start")
+    if (end - start).days > 400:
+        raise HTTPException(422, "日期范围过大(最多约一年)")
     stmt = (
         select(
             MealPlanEntry.id, MealPlan.id,
@@ -358,8 +378,7 @@ async def quick_log(
     today: date = Depends(get_today),
     redis: Redis = Depends(get_redis),
 ) -> MealPlanEntry:
-    variant = await db.get(RecipeVariant, payload.recipe_variant_id)
-    if variant is None:
+    if await _invisible_variants(db, user, [payload.recipe_variant_id]):
         raise HTTPException(404, f"菜谱版本 id={payload.recipe_variant_id} 不存在")
 
     d = payload.scheduled_date or today
@@ -455,8 +474,7 @@ async def add_entry(
     # 日期超出 plan 范围 → 自动扩展(与 quick-log 一致, 统一排餐行为)
     expand_plan_range(plan, payload.scheduled_date)
 
-    variant = await db.get(RecipeVariant, payload.recipe_variant_id)
-    if variant is None:
+    if await _invisible_variants(db, user, [payload.recipe_variant_id]):
         raise HTTPException(404, f"菜谱版本 id={payload.recipe_variant_id} 不存在")
 
     entry = MealPlanEntry(
@@ -487,7 +505,7 @@ async def delete_entry(
     """删除餐次。已完成的餐次由前端问用户: 删除并退回库存(restock=true) / 只删记录。
     退回必须在删除之前做(删后流水的 source_entry_id 置空)。
     """
-    entry = await _get_owned_entry(db, plan_id, entry_id, user)
+    entry = await _get_owned_entry(db, plan_id, entry_id, user, lock=True)
     affected_date = entry.scheduled_date          # 删前记下日期(删后取不到)
 
     losses: list[dict] = []
@@ -513,7 +531,7 @@ async def complete_entry(
     """标记完成 + 按 FEFO 扣减库存(同事务)。
     库存不足不阻止完成(I1/决策①): 短缺只作为信息返回。
     """
-    entry = await _get_owned_entry(db, plan_id, entry_id, user)
+    entry = await _get_owned_entry(db, plan_id, entry_id, user, lock=True)
 
     if entry.is_completed:
         return EntryCompleteRead(
@@ -549,7 +567,7 @@ async def uncomplete_entry(
     """撤销完成 + 把完成时扣的库存退回原批次(同事务, I2)。
     幂等: 未完成的 entry 直接返回, 不重复回补。原批次已删的部分退不回去, 在响应里提示(A5)。
     """
-    entry = await _get_owned_entry(db, plan_id, entry_id, user)
+    entry = await _get_owned_entry(db, plan_id, entry_id, user, lock=True)
 
     if not entry.is_completed:
         return {"entry": entry, "unrestorable": []}   # 本就未完成, 无需回补

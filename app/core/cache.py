@@ -69,3 +69,15 @@ async def invalidate_summary(redis: Redis, user_id, *days) -> None:
         return
     keys = [summary_key(user_id, d) for d in days]
     await cache_delete(redis, *keys)
+
+async def invalidate_all_summaries(redis: Redis, user_id) -> None:
+    """失效某用户**所有天**的营养汇总缓存 —— 营养目标变了时用(汇总里带着目标与达成率)。
+
+    用 SCAN 按前缀找 key(不用 KEYS, 避免阻塞 Redis)。出错静默忽略, 最坏等 TTL 过期。
+    """
+    try:
+        keys = [k async for k in redis.scan_iter(match=f"summary:{user_id}:*", count=200)]
+    except RedisError as e:
+        logger.warning("invalidate_all_summaries scan failed for %s: %s", user_id, e)
+        return
+    await cache_delete(redis, *keys)

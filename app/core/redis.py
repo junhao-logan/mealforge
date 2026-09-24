@@ -17,9 +17,12 @@ settings = get_settings()
 
 # 全局 client: 建一次全 app 复用(内部连接池)。
 # decode_responses=True: 存取直接用 str, 不用手动 encode/decode bytes。
+# 超时 1 秒: Redis 不可达时尽快失败、降级为查库(cache.py 吞掉错误), 而不是卡到 TCP 超时。
 redis_client: Redis = from_url(
     settings.redis_url,
     decode_responses=True,
+    socket_connect_timeout=1,
+    socket_timeout=1,
 )
 
 

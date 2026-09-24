@@ -11,6 +11,7 @@ import {
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 import { toISO } from '@/lib/dateRange'
+import { planLabel } from '@/lib/meals'
 import { reportRestockLosses } from '@/lib/restock'
 
 export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
@@ -61,9 +62,7 @@ export function PlanBar({ plans, activePlanId, onSelect, onChanged }) {
                         }`}
                     onClick={() => onSelect(p.id)}
                 >
-                    {p.plan_type === 'default'
-                        ? t('mealPlans.defaultPlanName')
-                        : (p.name || t('mealPlans.planFallback', { id: p.id }))}
+                    {planLabel(p, t)}
                 </button>
             ))}
 
@@ -135,7 +134,7 @@ export function DeletePlanButton({ plan, onDeleted }) {
     }
 
     async function del() {
-        let count = 0
+        let count
         try {
             const detail = await call(api.get, `/meal-plans/${plan.id}`)
             count = (detail?.entries || []).filter((e) => e.is_completed).length

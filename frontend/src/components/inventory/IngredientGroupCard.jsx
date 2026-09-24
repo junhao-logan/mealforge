@@ -5,9 +5,9 @@ import { ChevronDown, ChevronRight, Pencil, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Card } from '@/components/ui/card'
-import { weekdayLabel } from '@/lib/dateRange'
 import { daysUntil, expiryColor, expiryLabel } from '@/lib/expiry'
-import { fmtAmount, parseDate } from '@/lib/inventoryView'
+import { fmtAmount } from '@/lib/inventoryView'
+import { mealTitle } from '@/lib/meals'
 
 export function IngredientGroupCard({
     group, name, unit, shortfall, entriesById, expanded, onToggle,
@@ -146,13 +146,4 @@ function AllocationLine({ alloc, amt, entry, ingredientId, onOpenMeal }) {
             )}
         </button>
     )
-}
-
-// 「计划 · 周四 9/26 午餐 · 菜名」
-export function mealTitle(entry, t) {
-    const d = parseDate(entry.scheduled_date)
-    const plan = entry.plan_type === 'default'
-        ? t('mealPlans.defaultPlanName')
-        : (entry.plan_name || t('mealPlans.planFallback', { id: entry.plan_id }))
-    return `${plan} · ${weekdayLabel(d)} ${d.getMonth() + 1}/${d.getDate()} ${t(`meal.${entry.meal_type}`, entry.meal_type)} · ${entry.recipe_name}`
 }

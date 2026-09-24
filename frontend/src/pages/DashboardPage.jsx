@@ -9,41 +9,34 @@ import { MealEntryCard } from '@/components/mealplan/MealEntryCard'
 import { useApi } from '@/hooks/useApi'
 import { useEntryDelete } from '@/hooks/useEntryDelete'
 import { api } from '@/lib/api'
+import { fullDate, toISO } from '@/lib/dateRange'
 import { reportRestockLosses } from '@/lib/restock'
-import { toISO } from '@/lib/dateRange'
 
 export function DashboardPage() {
-    const { t, i18n } = useTranslation()
+    const { t } = useTranslation()   // 组件随语言切换重渲染, fullDate 跟着换语言
     const { call } = useApi()
     const today = new Date()
     const todayISO = toISO(today)
-    const locale = (i18n.language || 'en').startsWith('zh') ? 'zh-CN' : 'en-US'
-    const dateStr = today.toLocaleDateString(locale, {
-        weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    })
+    const dateStr = fullDate(today)
 
     const [summary, setSummary] = useState(null)
     const [entries, setEntries] = useState([])
     const [expiring, setExpiring] = useState([])
-    const [ingredients, setIngredients] = useState({})
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
     const reload = useCallback(async () => {
         try {
             setError(null)
-            const [sum, ents, inv, ings] = await Promise.all([
+            // 库存条目自带 ingredient_name, 不再额外拉有 100 条上限的 /ingredients
+            const [sum, ents, inv] = await Promise.all([
                 call(api.get, '/meal-plans/daily-summary', { params: { date: todayISO } }),
                 call(api.get, '/meal-plans/entries', { params: { start: todayISO, end: todayISO } }),
                 call(api.get, '/inventory'),
-                call(api.get, '/ingredients', { params: { limit: 100 } }),
             ])
             setSummary(sum)
             setEntries(ents || [])
             setExpiring((inv || []).filter((it) => it.expiry_status === 'expiring'))
-            const map = {}
-            for (const ing of ings || []) map[ing.id] = ing.name
-            setIngredients(map)
         } catch (e) {
             setError(e.message || t('common.loadFailed'))
         } finally {
@@ -158,7 +151,7 @@ export function DashboardPage() {
                                     className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm"
                                 >
                                     <span className="font-medium text-slate-900">
-                                        {ingredients[it.ingredient_id] || t('inventory.food', { id: it.ingredient_id })}
+                                        {it.ingredient_name || t('inventory.food', { id: it.ingredient_id })}
                                     </span>
                                     <span className="text-amber-700">
                                         {it.expires_at ? t('dashboard.expiresOn', { date: it.expires_at }) : t('dashboard.expiringTag')}

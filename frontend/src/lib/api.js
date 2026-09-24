@@ -6,6 +6,8 @@
 // 2. 统一 base URL、JSON 头、错误处理
 // 3. 页面只调 api.get('/inventory') 这种, 不关心 token / 拼 header
 
+import i18n from '@/i18n'
+
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
 // 浏览器所在时区(如 America/New_York)。后端据此算「今天」(A4.2),
@@ -58,7 +60,7 @@ function extractDetail(data, status) {
         return d.map((e) => e?.msg || JSON.stringify(e)).join('; ')
     }
     if (d && typeof d === 'object') return JSON.stringify(d)
-    return `请求失败 (${status})`
+    return i18n.t('common.requestFailed', { status })
 }
 
 export class ApiError extends Error {

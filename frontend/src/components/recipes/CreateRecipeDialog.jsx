@@ -14,6 +14,8 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { api } from '@/lib/api'
 import { unitLabel } from '@/lib/units'
 
+let rowSeq = 0   // 配料行 id 生成器(只在前端用)
+
 export function CreateRecipeDialog({ onCreated }) {
     const { t } = useTranslation()
     const { call } = useApi()
@@ -34,7 +36,8 @@ export function CreateRecipeDialog({ onCreated }) {
     }
 
     function addRow() {
-        setRows((rs) => [...rs, { ingredient: null, amount: '', unit: 'g', creating: false, pendingName: '' }])
+        // 每行一个稳定 id 作 key: 用下标当 key 时删掉中间一行, 后面行的搜索 / 新建状态会错位到上一行
+        setRows((rs) => [...rs, { id: ++rowSeq, ingredient: null, amount: '', unit: 'g', creating: false, pendingName: '' }])
     }
     function removeRow(i) {
         setRows((rs) => rs.filter((_, idx) => idx !== i))
@@ -85,15 +88,10 @@ export function CreateRecipeDialog({ onCreated }) {
 
     return (
         <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset() }}>
-            <DialogTrigger asChild>
-                <span
-                    role="button"
-                    tabIndex={0}
-                    className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                >
-                    <Plus className="h-4 w-4" />
-                    {t('recipes.manualCreate')}
-                </span>
+            {/* Base UI 的 Trigger 本身渲染成原生 <button>: 样式直接写在上面, 不再包一层 span(旧的 asChild 写法在 Base UI 里无效) */}
+            <DialogTrigger className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                <Plus className="h-4 w-4" />
+                {t('recipes.manualCreate')}
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
@@ -152,7 +150,7 @@ export function CreateRecipeDialog({ onCreated }) {
                         <div className="space-y-2">
                             {rows.map((row, i) => (
                                 <IngredientRow
-                                    key={i}
+                                    key={row.id}
                                     row={row}
                                     onPick={(ing) => setRowIngredient(i, ing)}
                                     onField={(f, v) => setRowField(i, f, v)}

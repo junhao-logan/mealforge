@@ -170,7 +170,7 @@ function MyRecipes({ refreshKey }) {
     const reload = useCallback(async () => {
         try {
             setError(null)
-            const data = await call(api.get, '/recipes')
+            const data = await call(api.get, '/recipes', { params: { limit: 100 } })   // 默认只取 20 道
             setRecipes(data || [])
         } catch (e) {
             setError(e.message || t('common.loadFailed'))

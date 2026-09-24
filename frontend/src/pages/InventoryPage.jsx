@@ -103,9 +103,6 @@ export function InventoryPage() {
 
     const hasUnzoned = groups.some((g) => g.zone === 'unzoned')
     const zones = hasUnzoned ? [...ZONES, UNZONED_ZONE] : ZONES
-    const ingredientNames = Object.fromEntries(
-        Object.entries(res?.ingredients || {}).map(([id, v]) => [id, v.name]),
-    )
 
     return (
         <div>
@@ -119,7 +116,7 @@ export function InventoryPage() {
                         <ArrowUpDown className="h-4 w-4" />
                         {freeFirst ? t('inventory.sortFreeFirst') : t('inventory.sortFreeLast')}
                     </button>
-                    <AddInventoryDialog ingredients={ingredientNames} onAdded={reload} />
+                    <AddInventoryDialog onAdded={reload} />
                 </div>
             </div>
 

@@ -1,21 +1,17 @@
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
+from app.ingredients.access import normalize_name, visible_to
 from app.ingredients.models import Ingredient
 from app.ingredients.schemas import IngredientCreate, IngredientRead
 from app.users.models import User
 
 router = APIRouter(prefix="/ingredients", tags=["ingredients"])
-
-
-def _normalize(name: str) -> str:
-    # lower + 折叠空格; 与搜索、入库保持一致
-    return " ".join(name.lower().split())
 
 
 @router.get("", response_model=list[IngredientRead])
@@ -37,16 +33,11 @@ async def list_ingredients(
         stmt = select(Ingredient).where(Ingredient.created_by_user_id == user.id)
     else:
         # 全部食物: 可见性过滤(I11) —— global 的 + 自己建的私有
-        stmt = select(Ingredient).where(
-            or_(
-                Ingredient.visibility == "global",
-                Ingredient.created_by_user_id == user.id,
-            )
-        )
+        stmt = select(Ingredient).where(visible_to(user.id))
 
     if name:
         # 查询词也 normalize,跟入库一致; LIKE 'xxx%' 前缀匹配走 name_normalized 索引
-        stmt = stmt.where(Ingredient.name_normalized.like(f"{_normalize(name)}%"))
+        stmt = stmt.where(Ingredient.name_normalized.like(f"{normalize_name(name)}%"))
 
     # 排序(补 id 兜底保证全序稳定分页)
     if sort == "recent":
@@ -75,7 +66,7 @@ async def create_ingredient(
     is_mass = basis_unit in ("g", "ml")
     ing = Ingredient(
         name=payload.name,
-        name_normalized=_normalize(payload.name),
+        name_normalized=normalize_name(payload.name),
         category=payload.category,
         per_100g_calories=payload.per_100g_calories,
         per_100g_protein=payload.per_100g_protein,

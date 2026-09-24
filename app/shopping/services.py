@@ -8,7 +8,7 @@ from decimal import Decimal
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ingredients.models import Ingredient
+from app.ingredients.access import ensure_visible_ingredients, ingredient_briefs
 from app.inventory.models import InventoryItem
 from app.inventory.schemas import InventoryItemCreate
 from app.inventory.services import create_inventory_item
@@ -67,6 +67,8 @@ async def _demand_and_stock(
         select(InventoryItem.ingredient_id, func.sum(InventoryItem.quantity_grams))
         .where(
             InventoryItem.user_id == user_id,
+            # 用光的零批次(A6 保留在库里)不参与, 否则预览多出「有 0 需 0」行
+            InventoryItem.quantity_grams > 0,
             or_(InventoryItem.expires_at.is_(None), InventoryItem.expires_at >= today),
         )
         .group_by(InventoryItem.ingredient_id)
@@ -120,19 +122,6 @@ async def in_flight_by_ingredient(db: AsyncSession, user_id) -> dict[int, Decima
         .group_by(ShoppingListItem.ingredient_id)
     )).all()
     return {ing_id: total for ing_id, total in rows}
-
-
-async def ingredient_briefs(db: AsyncSession, ids) -> dict[int, dict]:
-    """食材名 + 规范单位(前端不必再分页拉 /ingredients, 也不会把「块」写成 g)。"""
-    ids = {i for i in ids if i is not None}
-    if not ids:
-        return {}
-    return {
-        ing.id: {"name": ing.name, "unit": ing.nutrition_basis_unit or "g"}
-        for ing in (await db.execute(
-            select(Ingredient).where(Ingredient.id.in_(ids))
-        )).scalars().all()
-    }
 
 
 async def compute_preview(
@@ -257,6 +246,10 @@ async def add_manual_item(
     A8: 同一清单已有这个食材的**未购 manual 入库项**时, 把量并进那一行, 不新建。
     (auto 项不并 —— 重算会删掉未购 auto, 并进去的量会丢; 显示层会把 auto + manual 合成一行)
     """
+    if data.ingredient_id is not None:
+        # 只能加自己看得见的食材(I11); 不存在的 id 以前会在 FK 处 500
+        await ensure_visible_ingredients(db, sl.user_id, [data.ingredient_id])
+
     if data.ingredient_id is not None and data.add_to_inventory and data.needed_grams:
         existing = (await db.execute(
             select(ShoppingListItem).where(
@@ -324,14 +317,16 @@ async def mark_item_purchased(
     """打勾购买: 标记已购 + (若入库项)回流建库存批次(I9)。
 
     回流复用 inventory.create_inventory_item(建批次 + purchase 流水), 同事务原子完成;
-    调用方负责 commit。Week 5/6 输入即克, purchased_grams = purchased_amount。
+    调用方负责 commit。
+    purchased_amount / purchased_unit = 用户输入原样; purchased_grams = 换算后的**规范单位量**
+    (入库时 resolve_quantity 的结果, 如 2 piece 鸡胸 → 240 g), 与 needed_grams 同口径。
     """
     item.is_purchased = True
     item.purchased_at = datetime.now(UTC)
     if purchased_amount is not None:
         item.purchased_amount = purchased_amount
         item.purchased_unit = purchased_unit
-        item.purchased_grams = purchased_amount   # 输入即克(Week 5/6)
+        item.purchased_grams = purchased_amount   # 不入库的项没有换算依据, 原样记
 
     # 回流入库: 仅"入库项 + 关联食材 + 填了购买量"三者齐备时
     if (
@@ -339,7 +334,7 @@ async def mark_item_purchased(
         and item.ingredient_id is not None
         and purchased_amount is not None
     ):
-        await create_inventory_item(
+        batch = await create_inventory_item(
             db, user_id,
             InventoryItemCreate(
                 ingredient_id=item.ingredient_id,
@@ -350,5 +345,6 @@ async def mark_item_purchased(
                 expires_at=expires_at,
             ),
         )
+        item.purchased_grams = batch.quantity_grams   # 规范单位量(与 needed_grams 同口径)
     await db.flush()
     return item

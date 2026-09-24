@@ -12,6 +12,11 @@ from app.inventory.models import InventoryItem
 from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
 
 
+def recipe_visible_to(user_id):
+    """菜谱可见性(I11): global 的 + 自己建的。菜谱列表 / 详情 / 推荐 / AI 目录 / 排餐共用。"""
+    return or_(Recipe.visibility == "global", Recipe.created_by_user_id == user_id)
+
+
 def resolve_quantity(
     ingredient: Ingredient, input_amount: Decimal, input_unit: str
 ) -> Decimal:
@@ -26,9 +31,9 @@ def resolve_quantity(
     """
     canonical = ingredient.nutrition_basis_unit or "g"
     if input_unit == canonical:
-        return input_amount
+        return _within_limit(ingredient, input_amount)
     if canonical in ("g", "ml") and input_unit == ingredient.default_unit:
-        return input_amount * ingredient.grams_per_unit
+        return _within_limit(ingredient, input_amount * ingredient.grams_per_unit)
     raise HTTPException(
         status_code=422,
         detail=(
@@ -36,6 +41,17 @@ def resolve_quantity(
             f"收到 '{input_unit}'"
         ),
     )
+
+
+# 换算后的规范量上限: 最窄的存储列是 recipe_ingredients.quantity_grams Numeric(8,2)。
+# 所有换算都经过 resolve_quantity, 在这里拦一次, 超大输入返回 422 而不是入库时 500。
+QUANTITY_MAX = Decimal("999999")
+
+
+def _within_limit(ingredient: Ingredient, quantity: Decimal) -> Decimal:
+    if quantity > QUANTITY_MAX:
+        raise HTTPException(422, f"食材 '{ingredient.name}' 的数量过大")
+    return quantity
 
 
 def compute_variant_nutrition(variant: RecipeVariant) -> None:
@@ -116,12 +132,7 @@ async def recommend_recipes(
         .join(RecipeVariant, RecipeVariant.recipe_id == Recipe.id)
         .join(RecipeIngredient, RecipeIngredient.recipe_variant_id == RecipeVariant.id)
         .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
-        .where(
-            or_(
-                Recipe.visibility == "global",
-                Recipe.created_by_user_id == user.id,
-            )
-        )
+        .where(recipe_visible_to(user.id))
     )
     rows = (await db.execute(rows_stmt)).all()
 

@@ -4,10 +4,7 @@ import { Check, RotateCcw, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
 
-// 餐次类型 → i18n 键(meal.breakfast 等)
-const MEAL_KEY = {
-    breakfast: 'meal.breakfast', lunch: 'meal.lunch', dinner: 'meal.dinner', snack: 'meal.snack',
-}
+import { mealLabel } from '@/lib/meals'
 
 export function MealEntryCard({ entry, onComplete, onDelete, onUncomplete }) {
     const { t } = useTranslation()
@@ -17,7 +14,7 @@ export function MealEntryCard({ entry, onComplete, onDelete, onUncomplete }) {
             <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                     <span className="text-xs font-medium text-slate-400">
-                        {MEAL_KEY[entry.meal_type] ? t(MEAL_KEY[entry.meal_type]) : entry.meal_type}
+                        {mealLabel(entry.meal_type, t)}
                     </span>
                     <Link
                         to={`/recipes/${entry.recipe_id}`}

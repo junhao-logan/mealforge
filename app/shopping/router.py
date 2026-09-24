@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
 from app.core.dates import get_today
+from app.ingredients.access import ingredient_briefs
 from app.meal_plans.models import MealPlan
 from app.shopping.models import ShoppingList, ShoppingListItem
 from app.shopping.schemas import (
@@ -25,7 +26,6 @@ from app.shopping.services import (
     close_sibling_items,
     compute_preview,
     generate_shopping_list,
-    ingredient_briefs,
     mark_item_purchased,
     regenerate_auto_items,
 )
@@ -86,6 +86,9 @@ async def create_shopping_list(
             raise HTTPException(404, f"计划 id={payload.source_meal_plan_id} 不存在")
         start = start or plan.start_date
         end = end or plan.end_date
+    # 计划推导 + 显式日期混用时可能倒挂(如只给了晚于计划结束的 start), 否则撞 DB CHECK → 500
+    if end < start:
+        raise HTTPException(422, "end_date 不能早于 start_date")
 
     sl = await generate_shopping_list(
         db, user.id, start, end,
@@ -205,8 +208,9 @@ async def purchase_item(
     item = await _get_owned_item(db, list_id, item_id, user)
     if item.is_purchased:
         raise HTTPException(400, "该采购项已购买")
-    # 入库项必须填实际购买量, 否则无法建批次
-    if item.add_to_inventory and payload.purchased_amount is None:
+    # 入库项(关联了食材)必须填实际购买量, 否则无法建批次; 纯文本项(如厨房纸)不入库, 不用填
+    needs_amount = item.add_to_inventory and item.ingredient_id is not None
+    if needs_amount and payload.purchased_amount is None:
         raise HTTPException(422, "入库项需填 purchased_amount(实际购买量)")
 
     await mark_item_purchased(

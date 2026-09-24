@@ -9,18 +9,24 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.ai.client import AiError, AiResult, generate_meal_plan_raw, generate_recipe_raw
 from app.ai.models import AiGenerationLog
-from app.ai.prompts import build_user_message
+from app.ai.prompts import build_meal_plan_message, build_user_message
 from app.core.config import get_settings
+from app.ingredients.access import normalize_name, visible_to
 from app.ingredients.models import Ingredient
 from app.inventory.models import InventoryItem
+from app.meal_plans.schemas import AMOUNT_MAX
 from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
-from app.recipes.services import compute_variant_nutrition, resolve_quantity
+from app.recipes.services import (
+    compute_variant_nutrition,
+    recipe_visible_to,
+    resolve_quantity,
+)
 
 
 class EmptyInventoryError(Exception):
@@ -121,7 +127,11 @@ async def _persist_success(
     loaded = (await db.execute(
         select(Recipe)
         .where(Recipe.id == recipe.id)
-        .options(selectinload(Recipe.variants).selectinload(RecipeVariant.ingredients))
+        .options(
+            selectinload(Recipe.variants)
+            .selectinload(RecipeVariant.ingredients)
+            .selectinload(RecipeIngredient.ingredient)   # 响应里带食材名
+        )
     )).scalar_one()
     return loaded
 
@@ -133,13 +143,11 @@ def _num(v):
 async def _dedupe_or_create_ingredient(db, user, name: str, per100g: dict | None) -> Ingredient:
     """新食材: 先按规范化名去重(全局或本人私有)。命中 → 复用(用库里准确营养);
     没有 → 新建(克本位 + AI 估算营养, source=ai_generated, private)。不 commit。"""
-    norm = " ".join(name.lower().split())
+    norm = normalize_name(name)
     ing = (await db.execute(
         select(Ingredient).where(
-            Ingredient.name_normalized == norm,
-            or_(Ingredient.visibility == "global",
-                Ingredient.created_by_user_id == user.id),
-        ).limit(1)
+            Ingredient.name_normalized == norm, visible_to(user.id),
+        ).order_by(Ingredient.id).limit(1)
     )).scalar_one_or_none()
     if ing is not None:
         return ing                         # 命中: 用库里的准确营养, 不用 AI 估
@@ -167,7 +175,10 @@ async def persist_new_recipe(db, user, nr: dict) -> int:
     for ln in nr["ingredients"]:
         iid = ln.get("ingredient_id")
         if iid is not None:
-            ing = await db.get(Ingredient, iid)
+            # 只能引用自己看得见的食材(I11), 与 palette 口径一致
+            ing = (await db.execute(
+                select(Ingredient).where(Ingredient.id == iid, visible_to(user.id))
+            )).scalar_one_or_none()
             if ing is None:
                 raise RecipeValidationError(f"配料引用了不存在的食材 id: {iid}")
         else:
@@ -183,7 +194,8 @@ async def persist_new_recipe(db, user, nr: dict) -> int:
     )
     variant = RecipeVariant(
         name="AI", instructions=nr["instructions"],
-        servings=int(nr.get("servings") or 1),
+        # servings 是整数列: 0.5 之类四舍五入, 至少 1 份(int() 会把 0.5 截成 0)
+        servings=max(1, round(float(nr.get("servings") or 1))),
     )
     for ing, amount, unit in resolved:
         qty = resolve_quantity(ing, amount, unit)
@@ -254,10 +266,6 @@ class EmptyRecipeCatalogError(Exception):
 
 async def _variant_catalog(db: AsyncSession, user_id) -> list[dict]:
     """grounding 数据: 用户可见菜谱的所有 variant + 主料名(供 AI 挑选排布)。"""
-    from sqlalchemy import or_ as _or
-
-    from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
-
     rows = (await db.execute(
         select(
             RecipeVariant.id, Recipe.name, RecipeVariant.name,
@@ -266,7 +274,7 @@ async def _variant_catalog(db: AsyncSession, user_id) -> list[dict]:
         .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
         .join(RecipeIngredient, RecipeIngredient.recipe_variant_id == RecipeVariant.id)
         .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
-        .where(_or(Recipe.visibility == "global", Recipe.created_by_user_id == user_id))
+        .where(recipe_visible_to(user_id))
     )).all()
 
     catalog: dict[int, dict] = {}
@@ -282,7 +290,6 @@ async def _variant_catalog(db: AsyncSession, user_id) -> list[dict]:
 
 async def _inventory_ingredient_ids(db: AsyncSession, user_id) -> set[int]:
     """当前有货(quantity_grams>0)的食材 id 集合 —— 供"只用库存"过滤。"""
-    from app.inventory.models import InventoryItem
     rows = (await db.execute(
         select(InventoryItem.ingredient_id)
         .where(InventoryItem.user_id == user_id, InventoryItem.quantity_grams > 0)
@@ -321,11 +328,15 @@ def _validate_plan(tool_input: dict, catalog_ids: set[int], days: int,
                     raise RecipeValidationError(
                         f"new_recipe 引用了清单外的食材 id: {iid}", raw=tool_input
                     )
-                if iid is None and not ln.get("new_name"):
+                name = (ln.get("new_name") or "").strip()
+                if iid is None and not name:
                     raise RecipeValidationError(
                         "配料无 ingredient_id 也无 new_name", raw=tool_input)
-                if not ln.get("amount") or float(ln["amount"]) <= 0:
-                    raise RecipeValidationError("amount 必须 > 0", raw=tool_input)
+                if len(name) > 100:
+                    raise RecipeValidationError("new_name 过长", raw=tool_input)
+                # 与确认接口(NewRecipeIngredient)同一上限: 能预览出来的草稿就一定能确认
+                if not ln.get("amount") or not 0 < float(ln["amount"]) <= AMOUNT_MAX:
+                    raise RecipeValidationError("amount 必须在 (0, 100000] 内", raw=tool_input)
             continue
 
         vid = e.get("recipe_variant_id")
@@ -340,12 +351,12 @@ def _validate_plan(tool_input: dict, catalog_ids: set[int], days: int,
 
 async def _ingredient_palette(db: AsyncSession, user_id, *, only_ids=None) -> list[dict]:
     """现编新菜谱的 grounding: 用户可见食材(全局或本人私有)的 id + 名字 + 规范单位。
-    only_ids 给定时只取这些(用于"只用库存"—— 限定在库存食材里现编)。上限 80 条。"""
-    from sqlalchemy import or_ as _or
+    only_ids 给定时只取这些(用于"只用库存"—— 限定在库存食材里现编)。
+    上限 80 条(控 prompt 体积); 先放自己建的、再按名字排, 截断结果稳定可复现。"""
     stmt = (
         select(Ingredient.id, Ingredient.name, Ingredient.nutrition_basis_unit)
-        .where(_or(Ingredient.visibility == "global",
-                   Ingredient.created_by_user_id == user_id))
+        .where(visible_to(user_id))
+        .order_by((Ingredient.created_by_user_id == user_id).desc(), Ingredient.name)
     )
     if only_ids is not None:
         if not only_ids:
@@ -385,8 +396,6 @@ async def generate_meal_plan(
     · ingredient_source='any': 不限(缺料后续采购补齐)
     返回草稿, entries 每条: 已有 → recipe_variant_id; 现编 → is_new + new_recipe。
     """
-    from app.ai.prompts import build_meal_plan_message
-
     meals = meals or ["lunch", "dinner"]
     allow_new = recipe_source == "new"
     inventory_only = ingredient_source == "inventory"

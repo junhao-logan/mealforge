@@ -1,5 +1,7 @@
 // src/components/shopping/PurchaseDialog.jsx
-// 打勾购买: 入库项填实际购买量 → PATCH purchase(回流库存 I9)
+// 单项购买: 入库项填实际购买量 → PATCH purchase(回流库存 I9)
+// 目前未接入: 清单页的结算统一走 CheckoutDialog(批量)。保留作「只买这一样」的快捷入口,
+// 接入时注意: item 需带 unit(清单接口已返回), 同食材兄弟行后端会一并标记已购(A8)。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -18,7 +20,7 @@ export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurcha
     const [error, setError] = useState(null)
 
     // 打开时预填 needed_grams
-    const defaultAmount = item?.needed_grams ? Number(item.needed_grams).toFixed(0) : ''
+    const defaultAmount = item?.needed_grams ? String(Number(Number(item.needed_grams).toFixed(2))) : ''
 
     async function submit() {
         const amt = amount || defaultAmount
@@ -33,7 +35,7 @@ export function PurchaseDialog({ open, listId, item, itemName, onClose, onPurcha
             await call(
                 api.patch,
                 `/shopping-lists/${listId}/items/${item.id}/purchase`,
-                { body: { purchased_amount: amt ? Number(amt) : null, purchased_unit: 'g' } },
+                { body: { purchased_amount: amt ? Number(amt) : null, purchased_unit: item?.unit || 'g' } },   // 规范单位(块 / 个 / g)
             )
             setAmount('')
             onPurchased?.()

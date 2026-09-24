@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,7 +12,7 @@ from app.ai.services import (
 )
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
-from app.ingredients.models import Ingredient
+from app.ingredients.access import ensure_visible_ingredients
 from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
 from app.recipes.schemas import (
     RecipeCreate,
@@ -22,6 +22,7 @@ from app.recipes.schemas import (
 )
 from app.recipes.services import (
     compute_variant_nutrition,
+    recipe_visible_to,
     recommend_recipes,
     resolve_quantity,
 )
@@ -71,16 +72,13 @@ async def create_recipe(
 
     # 3. 逐条配料: 查食材 → D5 换算克 → 建 RecipeIngredient
     #    先把要用的食材一次性查出来(避免循环里逐条查 = N+1)
-    ing_ids = [ri.ingredient_id for ri in v.ingredients]
-    ings = (await db.execute(
-        select(Ingredient).where(Ingredient.id.in_(ing_ids))
-    )).scalars().all()
-    ing_map = {i.id: i for i in ings}
+    #    只能引用自己看得见的食材(I11): 别人的私有食材一律 404
+    ing_map = await ensure_visible_ingredients(
+        db, user.id, [ri.ingredient_id for ri in v.ingredients]
+    )
 
     for ri in v.ingredients:
-        ingredient = ing_map.get(ri.ingredient_id)
-        if ingredient is None:
-            raise HTTPException(404, f"食材 id={ri.ingredient_id} 不存在")
+        ingredient = ing_map[ri.ingredient_id]
         quantity = resolve_quantity(ingredient, ri.input_amount, ri.input_unit)
         recipe_ing = RecipeIngredient(
             ingredient_id=ingredient.id,
@@ -102,14 +100,6 @@ async def create_recipe(
     # 6. 重新加载完整对象返回(含 DB 生成的 id / 时间戳)
     loaded = await _load_full_recipe(db, recipe.id)
     return loaded
-
-
-def _visible_to(user: User):
-    """可见性条件(I11): global 的 + 自己建的。"""
-    return or_(
-        Recipe.visibility == "global",
-        Recipe.created_by_user_id == user.id,
-    )
 
 
 @router.post("/generate", response_model=RecipeRead, status_code=201)
@@ -138,13 +128,23 @@ async def list_recipes(
     db: AsyncSession = Depends(get_db),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-) -> list[Recipe]:
+) -> list[dict]:
+    # 同时带出每道菜的第一个做法 id(最早建的那个), 一条查询, 不必逐个取详情
+    first_variant = (
+        select(RecipeVariant.recipe_id, func.min(RecipeVariant.id).label("vid"))
+        .group_by(RecipeVariant.recipe_id)
+        .subquery()
+    )
     stmt = (
-        select(Recipe)
-        .where(_visible_to(user))
+        select(Recipe, first_variant.c.vid)
+        .outerjoin(first_variant, first_variant.c.recipe_id == Recipe.id)
+        .where(recipe_visible_to(user.id))
         .order_by(Recipe.id).offset(skip).limit(limit)
     )
-    return list((await db.execute(stmt)).scalars().all())
+    return [
+        {**RecipeListItem.model_validate(r).model_dump(), "default_variant_id": vid}
+        for r, vid in (await db.execute(stmt)).all()
+    ]
 
 
 @router.get("/recommendations", response_model=list[RecipeRecommendation])

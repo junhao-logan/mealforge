@@ -8,16 +8,10 @@ import {
 } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
+import { MEAL_OPTIONS, planLabel } from '@/lib/meals'
 
-// 餐段: value 存后端, labelKey 显示
-const MEALS = [
-    { value: 'breakfast', labelKey: 'meal.breakfast' },
-    { value: 'lunch', labelKey: 'meal.lunch' },
-    { value: 'dinner', labelKey: 'meal.dinner' },
-    { value: 'snack', labelKey: 'meal.snack' },
-]
 
-export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAdded }) {
+export function AddEntryDialog({ open, date, plans, defaultPlanId, defaultMealType, onClose, onAdded }) {
     const { t } = useTranslation()
     const { call } = useApi()
     const [recipes, setRecipes] = useState([])
@@ -35,20 +29,25 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
         setPlanId(String(defaultPlanId || defaultPlan?.id || plans[0]?.id || ''))
     }, [open, defaultPlanId, plans])
 
+    // 每次打开都从干净状态开始; 天视图里从某个餐段点「添加」时, 预选那个餐段
+    useEffect(() => {
+        if (!open) return
+        setVariantId(''); setServings('1'); setError(null)
+        setMealType(defaultMealType || 'lunch')
+    }, [open, defaultMealType])
+
     useEffect(() => {
         if (!open) return
         let alive = true
         async function load() {
             try {
-                const list = await call(api.get, '/recipes')
+                // 列表接口直接带 default_variant_id, 一个请求搞定
+                // (原来为每道菜再请求一次详情: 1 + N 个串行请求, 且默认只取前 20 道)
+                const list = await call(api.get, '/recipes', { params: { limit: 100 } })
                 if (!alive) return
-                const withVariants = []
-                for (const r of list || []) {
-                    const detail = await call(api.get, `/recipes/${r.id}`)
-                    const v = detail.variants?.[0]
-                    if (v) withVariants.push({ id: r.id, name: r.name, variant_id: v.id })
-                }
-                if (alive) setRecipes(withVariants)
+                setRecipes((list || [])
+                    .filter((r) => r.default_variant_id)
+                    .map((r) => ({ id: r.id, name: r.name, variant_id: r.default_variant_id })))
             } catch (e) {
                 if (alive) setError(e.message || t('mealPlans.errLoadRecipes'))
             }
@@ -72,17 +71,12 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
                     servings: Number(servings),
                 },
             })
-            setVariantId(''); setMealType('lunch'); setServings('1')
             onAdded?.()
             onClose?.()
         } catch (e) {
-            // add_entry 会校验日期在 plan 范围内; 但新 plan 日期是今天, 排未来餐会 422
-            // 注: 这里匹配后端返回的中文错误串, 后端本地化前保持不变
-            if (e.status === 422 && String(e.message).includes('超出计划范围')) {
-                setError(t('mealPlans.errOutOfRange'))
-            } else {
-                setError(e.message || t('mealPlans.errAddEntry'))
-            }
+            // 注: 以前这里匹配后端中文错误串「超出计划范围」; 后端早已改为自动扩展计划日期范围,
+            // 不会再返回这个错误, 分支已删除
+            setError(e.message || t('mealPlans.errAddEntry'))
         } finally {
             setSubmitting(false)
         }
@@ -105,11 +99,7 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
                             onChange={(e) => setPlanId(e.target.value)}
                         >
                             {plans.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                    {p.plan_type === 'default'
-                                        ? t('mealPlans.defaultPlanName')
-                                        : (p.name || t('mealPlans.planFallback', { id: p.id }))}
-                                </option>
+                                <option key={p.id} value={p.id}>{planLabel(p, t)}</option>
                             ))}
                         </select>
                     </div>
@@ -137,7 +127,7 @@ export function AddEntryDialog({ open, date, plans, defaultPlanId, onClose, onAd
                                 value={mealType}
                                 onChange={(e) => setMealType(e.target.value)}
                             >
-                                {MEALS.map((m) => (
+                                {MEAL_OPTIONS.map((m) => (
                                     <option key={m.value} value={m.value}>{t(m.labelKey)}</option>
                                 ))}
                             </select>

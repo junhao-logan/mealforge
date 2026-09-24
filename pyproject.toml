@@ -46,6 +46,11 @@ select = ["E", "F", "I", "UP", "B"]
 # B008: FastAPI 依赖注入依赖 Depends() 作为默认值, 是框架标准写法(官方建议忽略)
 ignore = ["B008"]
 
+[tool.ruff.lint.per-file-ignores]
+# Alembic 迁移是已在线上执行过的历史记录: 不为格式去改它们(改了也不会重跑, 只会制造无意义的 diff)。
+# 新迁移仍照常受其余规则检查
+"alembic/versions/*" = ["E501", "I001", "F401"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 

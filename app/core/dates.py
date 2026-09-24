@@ -21,7 +21,8 @@ def today_in(tz_name: str | None) -> date:
     if tz_name and len(tz_name) <= 64:
         try:
             return datetime.now(ZoneInfo(tz_name.strip())).date()
-        except (ZoneInfoNotFoundError, ValueError):
+        except (ZoneInfoNotFoundError, ValueError, OSError):
+            # OSError: "America"、"Etc" 这类目录名会让 zoneinfo 抛 IsADirectoryError
             pass
     return datetime.now(UTC).date()
 

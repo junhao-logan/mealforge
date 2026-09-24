@@ -37,7 +37,7 @@ export function sortKey(days) {
 const EXPIRING_DAYS = 3
 export function expiryLabel(days) {
     if (days === null || days === undefined) return null
-    if (days < 0) return { text: '已过期', variant: 'expired' }
-    if (days <= EXPIRING_DAYS) return { text: '临期', variant: 'expiring' }
+    if (days < 0) return { variant: 'expired' }         // 文案由调用方走 t('inventory.expired')
+    if (days <= EXPIRING_DAYS) return { variant: 'expiring' }
     return null
 }

@@ -19,7 +19,7 @@ const ZONES = [
 ]
 
 // checkoutItems: [{ item, name, unit, amount }] —— 勾选且填了量的(每个显示行一个代表 item)
-export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone }) {
+export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone, onPartial }) {
     const { t } = useTranslation()
     const { call } = useApi()
     const [locations, setLocations] = useState({})   // itemId → location
@@ -35,6 +35,7 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
     }
 
     async function checkout() {
+        const doneIds = []
         try {
             setSubmitting(true)
             setError(null)
@@ -53,11 +54,15 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
                         },
                     },
                 )
+                doneIds.push(item.id)
             }
             onDone?.()
             onClose?.()
         } catch (e) {
             setError(e.message || t('shopping.errCheckout'))
+            // 中途失败: 只把已经买成功的那几项移出勾选并刷新清单(否则重试会再提交一遍, 后端报「已购买」);
+            // 失败的和还没提交的保持勾选和已填数量, 用户直接重试即可
+            if (doneIds.length > 0) onPartial?.(doneIds)
         } finally {
             setSubmitting(false)
         }

@@ -21,6 +21,7 @@
     "signOut": "退出登录"
   },
   "common": {
+    "requestFailed": "请求失败 ({{status}})",
     "loading": "加载中…",
     "errorPrefix": "出错了: {{msg}}",
     "loadFailed": "加载失败",
@@ -154,6 +155,12 @@
     "errBasis": "基准量要大于 0"
   },
   "recipes": {
+    "notFound": "菜谱不存在",
+    "backToList": "返回菜谱",
+    "difficultyEasy": "简单",
+    "difficultyMedium": "中等",
+    "difficultyHard": "困难",
+    "minutes": "{{count}} 分钟",
     "title": "菜谱",
     "tabCanMake": "我能做什么",
     "tabMine": "我的菜谱",

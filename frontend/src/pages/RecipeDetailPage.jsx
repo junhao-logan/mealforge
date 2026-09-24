@@ -1,23 +1,30 @@
 // src/pages/RecipeDetailPage.jsx —— 菜谱详情(营养 + 配料 + 做法)
+// 食材名随配料返回(ingredient_name), 不再拉有 100 条上限的 /ingredients; 文案全部走 t()。
 import { ArrowLeft, Clock, Flame } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate, useParams } from 'react-router'
 
 import { Card } from '@/components/ui/card'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
+import { fmtAmount } from '@/lib/inventoryView'
 
-const SOURCE_LABEL = {
-    ai_generated: 'AI 生成', ai: 'AI 生成', user: '自建', manual: '手动',
+// 来源 → 文案 key(与菜谱列表页一致)
+const SOURCE_KEY = {
+    ai_generated: 'recipes.sourceAi', ai: 'recipes.sourceAi',
+    user: 'recipes.sourceUser', manual: 'recipes.sourceManual',
 }
-const DIFFICULTY_LABEL = { easy: '简单', medium: '中等', hard: '困难' }
+const DIFFICULTY_KEY = {
+    easy: 'recipes.difficultyEasy', medium: 'recipes.difficultyMedium', hard: 'recipes.difficultyHard',
+}
 
 export function RecipeDetailPage() {
+    const { t } = useTranslation()
     const { id } = useParams()
     const navigate = useNavigate()
     const { call } = useApi()
     const [recipe, setRecipe] = useState(null)
-    const [ingredients, setIngredients] = useState({})   // id → name
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
@@ -26,28 +33,21 @@ export function RecipeDetailPage() {
         async function load() {
             try {
                 setError(null)
-                const [r, ings] = await Promise.all([
-                    call(api.get, `/recipes/${id}`),
-                    call(api.get, '/ingredients', { params: { limit: 100 } }),
-                ])
-                if (!alive) return
-                setRecipe(r)
-                const map = {}
-                for (const ing of ings || []) map[ing.id] = ing.name
-                setIngredients(map)
+                const r = await call(api.get, `/recipes/${id}`)
+                if (alive) setRecipe(r)
             } catch (e) {
-                if (alive) setError(e.message || '加载失败')
+                if (alive) setError(e.message || t('common.loadFailed'))
             } finally {
                 if (alive) setLoading(false)
             }
         }
         load()
         return () => { alive = false }
-    }, [id, call])
+    }, [id, call, t])
 
-    if (loading) return <State text="加载中…" />
-    if (error) return <State text={`出错了: ${error}`} />
-    if (!recipe) return <State text="菜谱不存在" />
+    if (loading) return <State text={t('common.loading')} />
+    if (error) return <State text={t('common.errorPrefix', { msg: error })} />
+    if (!recipe) return <State text={t('recipes.notFound')} />
 
     return (
         <div className="mx-auto max-w-3xl">
@@ -56,7 +56,7 @@ export function RecipeDetailPage() {
                 className="mb-4 flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"
                 onClick={() => navigate('/recipes')}
             >
-                <ArrowLeft className="h-4 w-4" /> 返回菜谱
+                <ArrowLeft className="h-4 w-4" /> {t('recipes.backToList')}
             </button>
 
             {/* 标题 */}
@@ -72,7 +72,7 @@ export function RecipeDetailPage() {
                 </div>
                 {recipe.source && (
                     <span className="whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500">
-                        {SOURCE_LABEL[recipe.source] || recipe.source}
+                        {SOURCE_KEY[recipe.source] ? t(SOURCE_KEY[recipe.source]) : recipe.source}
                     </span>
                 )}
             </div>
@@ -80,14 +80,15 @@ export function RecipeDetailPage() {
             {/* 每个 variant(做法) */}
             <div className="space-y-6">
                 {recipe.variants.map((v) => (
-                    <VariantSection key={v.id} variant={v} ingredients={ingredients} />
+                    <VariantSection key={v.id} variant={v} />
                 ))}
             </div>
         </div>
     )
 }
 
-function VariantSection({ variant: v, ingredients }) {
+function VariantSection({ variant: v }) {
+    const { t } = useTranslation()
     return (
         <Card className="p-6">
             {/* variant 名 + 元信息 */}
@@ -95,35 +96,33 @@ function VariantSection({ variant: v, ingredients }) {
                 <h2 className="text-lg font-semibold text-slate-900">{v.name}</h2>
                 {v.cooking_time_minutes && (
                     <span className="flex items-center gap-1 text-sm text-slate-500">
-                        <Clock className="h-4 w-4" /> {v.cooking_time_minutes} 分钟
+                        <Clock className="h-4 w-4" /> {t('recipes.minutes', { count: v.cooking_time_minutes })}
                     </span>
                 )}
                 {v.difficulty && (
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                        {DIFFICULTY_LABEL[v.difficulty] || v.difficulty}
+                        {DIFFICULTY_KEY[v.difficulty] ? t(DIFFICULTY_KEY[v.difficulty]) : v.difficulty}
                     </span>
                 )}
-                <span className="text-sm text-slate-400">{v.servings} 份</span>
+                <span className="text-sm text-slate-400">{t('meal.servings', { count: v.servings })}</span>
             </div>
 
             {/* 营养 */}
             <div className="mb-5 grid grid-cols-4 gap-3">
-                <NutritionStat label="热量" value={v.total_calories} unit="kcal" icon={Flame} />
-                <NutritionStat label="蛋白" value={v.total_protein_g} unit="g" />
-                <NutritionStat label="碳水" value={v.total_carbs_g} unit="g" />
-                <NutritionStat label="脂肪" value={v.total_fat_g} unit="g" />
+                <NutritionStat label={t('macro.calories')} value={v.total_calories} unit="kcal" icon={Flame} />
+                <NutritionStat label={t('macro.protein')} value={v.total_protein_g} unit="g" />
+                <NutritionStat label={t('macro.carbs')} value={v.total_carbs_g} unit="g" />
+                <NutritionStat label={t('macro.fat')} value={v.total_fat_g} unit="g" />
             </div>
 
-            {/* 配料 */}
+            {/* 配料: 按录入时的数量 + 单位显示(单位按界面语言, 如 块 → chunk) */}
             <div className="mb-5">
-                <h3 className="mb-2 text-sm font-medium text-slate-700">配料</h3>
+                <h3 className="mb-2 text-sm font-medium text-slate-700">{t('recipes.ingredients')}</h3>
                 <div className="space-y-1">
                     {v.ingredients.map((ing) => (
                         <div key={ing.id} className="flex justify-between text-sm text-slate-600">
-                            <span>{ingredients[ing.ingredient_id] || `食材 #${ing.ingredient_id}`}</span>
-                            <span className="text-slate-400">
-                                {ing.input_amount} {ing.input_unit}
-                            </span>
+                            <span>{ing.ingredient_name || t('inventory.food', { id: ing.ingredient_id })}</span>
+                            <span className="text-slate-400">{fmtAmount(ing.input_amount, ing.input_unit)}</span>
                         </div>
                     ))}
                 </div>
@@ -131,7 +130,7 @@ function VariantSection({ variant: v, ingredients }) {
 
             {/* 做法 */}
             <div>
-                <h3 className="mb-2 text-sm font-medium text-slate-700">做法</h3>
+                <h3 className="mb-2 text-sm font-medium text-slate-700">{t('recipes.instructions')}</h3>
                 <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-600">
                     {v.instructions}
                 </p>

@@ -4,17 +4,17 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ingredients.models import Ingredient
+from app.ingredients.access import ensure_visible_ingredients, ingredient_briefs
 from app.inventory.models import EntryBatchPick, InventoryItem, InventoryTransaction
 from app.inventory.reservations import (
     compute_reservations,
     fefo_key,
     hard_reserved,
     is_expired,
+    quantize_amount,
 )
 from app.inventory.schemas import InventoryItemCreate, InventoryItemUpdate
 from app.meal_plans.models import MealPlanEntry
@@ -31,10 +31,11 @@ async def create_inventory_item(
     A2: 按食材规范单位换算 —— input_unit 经 resolve_quantity 转成规范单位下的量存入
     quantity_grams(质量食材=克; 单位本位食材=个/块)。
     """
-    # 0) 取食材, 用其规范单位换算输入量(单位本位食材只接受自己的单位, 不接受克)
-    ingredient = await db.get(Ingredient, data.ingredient_id)
-    if ingredient is None:
-        raise HTTPException(404, f"食材 id={data.ingredient_id} 不存在")
+    # 0) 取食材(只能用自己看得见的, I11), 用其规范单位换算输入量
+    #    (单位本位食材只接受自己的单位, 不接受克)
+    ingredient = (await ensure_visible_ingredients(db, user_id, [data.ingredient_id]))[
+        data.ingredient_id
+    ]
     quantity = resolve_quantity(ingredient, data.input_amount, data.input_unit)
 
     # 1) 建库存批次。quantity_grams = 换算后的规范单位量(I3 克本位 / A2 单位本位)
@@ -121,6 +122,9 @@ async def deduct_for_entry(
     needs: dict[int, Decimal] = {}
     for ri in (await db.execute(ri_stmt)).scalars().all():
         needs[ri.ingredient_id] = needs.get(ri.ingredient_id, Decimal("0")) + line_demand(ri, entry)
+    # 量化到 0.01, 与预留视图同口径; 否则 1.5 × 33.33 = 49.995 扣 49.99、流水记 -50.00,
+    # 撤销时按流水退 50.00, 每轮「完成 → 撤销」凭空多出 0.01
+    needs = {i: quantize_amount(n) for i, n in needs.items()}
 
     # 2) 本餐手选(按勾选顺序)
     picks: dict[int, list[int]] = {}
@@ -132,19 +136,31 @@ async def deduct_for_entry(
         picks.setdefault(p.ingredient_id, []).append(p.inventory_item_id)
 
     shortfalls: list[dict] = []
+    if not needs:
+        await db.flush()
+        return shortfalls
+
+    # 3) 所有相关批次一次取出并加行锁(防并发完成餐次时重复扣同一批次)。
+    #    一条查询代替「每种食材一条」(N+1); ORDER BY id 让加锁顺序固定, 两个请求不会互相等成死锁
+    locked = (await db.execute(
+        select(InventoryItem)
+        .where(
+            InventoryItem.user_id == user_id,
+            InventoryItem.ingredient_id.in_(needs.keys()),
+            InventoryItem.quantity_grams > 0,          # 跳过扣光的零批次
+        )
+        .order_by(InventoryItem.id)
+        .with_for_update()
+        # 上面 compute_reservations 已把这些批次无锁读进了 session; 不加这个, 拿到锁后
+        # 返回的仍是 session 里的旧对象(旧余量), 两个请求同时扣同一批时会丢一次扣减
+        .execution_options(populate_existing=True)
+    )).scalars().all()
+    by_ingredient: dict[int, list[InventoryItem]] = {}
+    for b in locked:
+        by_ingredient.setdefault(b.ingredient_id, []).append(b)
 
     for ingredient_id, needed in needs.items():
-        # 3) 该食材的可用批次(行锁: 防并发完成餐次时重复扣同一批次)
-        batch_stmt = (
-            select(InventoryItem)
-            .where(
-                InventoryItem.user_id == user_id,
-                InventoryItem.ingredient_id == ingredient_id,
-                InventoryItem.quantity_grams > 0,      # 跳过扣光的零批次
-            )
-            .with_for_update()
-        )
-        batches = sorted((await db.execute(batch_stmt)).scalars().all(), key=fefo_key)
+        batches = sorted(by_ingredient.get(ingredient_id, []), key=fefo_key)
         by_id = {b.id: b for b in batches}
 
         remaining = needed
@@ -208,20 +224,26 @@ async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> 
         )
     )).all()
 
-    lost: dict[int, Decimal] = {}
-    for item_id, ingredient_id, net in rows:
-        give_back = -(net or Decimal("0"))     # 净消耗为负 → 回补为正
-        if give_back <= 0:
-            continue                            # 已净平(撤销过)或非消耗, 跳过
+    owed = [(i, ing, -(net or Decimal("0"))) for i, ing, net in rows]
+    owed = [o for o in owed if o[2] > 0]        # 净消耗为负 → 回补为正; 已净平的跳过
 
-        batch = None
-        if item_id is not None:
-            # 行锁取原批次, += 回补
-            batch = (await db.execute(
+    # 原批次一次取出并加行锁(代替逐批查询), 按 id 排序固定加锁顺序
+    batch_ids = {i for i, _, _ in owed if i is not None}
+    batches = {}
+    if batch_ids:
+        batches = {
+            b.id: b for b in (await db.execute(
                 select(InventoryItem)
-                .where(InventoryItem.id == item_id)
+                .where(InventoryItem.id.in_(batch_ids))
+                .order_by(InventoryItem.id)
                 .with_for_update()
-            )).scalar_one_or_none()
+                .execution_options(populate_existing=True)   # 拿锁后读最新余量
+            )).scalars().all()
+        }
+
+    lost: dict[int, Decimal] = {}
+    for item_id, ingredient_id, give_back in owed:
+        batch = batches.get(item_id) if item_id is not None else None
 
         if batch is None:
             # 原批次已删: 退不回去 → 冲销流水(不动库存), 记入返回
@@ -252,19 +274,12 @@ async def restock_for_entry(db: AsyncSession, user_id, entry: MealPlanEntry) -> 
 
 async def describe_losses(db: AsyncSession, losses: list[dict]) -> list[dict]:
     """给「退不回去」的条目补上食材名和规范单位, 供前端提示。"""
-    if not losses:
-        return []
-    ings = {
-        i.id: i for i in (await db.execute(
-            select(Ingredient).where(Ingredient.id.in_({x["ingredient_id"] for x in losses}))
-        )).scalars().all()
-    }
+    briefs = await ingredient_briefs(db, [x["ingredient_id"] for x in losses])
     return [
         {
             **x,
-            "name": ings[x["ingredient_id"]].name if x["ingredient_id"] in ings else None,
-            "unit": (ings[x["ingredient_id"]].nutrition_basis_unit or "g")
-            if x["ingredient_id"] in ings else "g",
+            "name": briefs.get(x["ingredient_id"], {}).get("name"),
+            "unit": briefs.get(x["ingredient_id"], {}).get("unit", "g"),
         }
         for x in losses
     ]
@@ -284,13 +299,13 @@ async def update_inventory_item(
     """盘点修正: 只改当前余量与日期。input_amount/unit 是入库时的原始记录, 不改。
     不记流水(I2 补充: 人工调整非消耗事件)。
     """
-    if data.quantity_grams is not None:
-        item.quantity_grams = data.quantity_grams   # 只改余量
-    if data.purchased_at is not None:
-        item.purchased_at = data.purchased_at
-    if data.expires_at is not None:
-        item.expires_at = data.expires_at
-    if data.location is not None:
-        item.location = data.location
+    # 只处理请求里**显式传了**的字段(exclude_unset): 这样传 null 能清空过期日 / 储存区,
+    # 没传的字段保持不变。之前用「is not None」判断, 前端清空过期日会被静默忽略。
+    sent = data.model_dump(exclude_unset=True)
+    if sent.get("quantity_grams") is not None:         # 余量不能清空, null 视为未改
+        item.quantity_grams = sent["quantity_grams"]   # 只改余量
+    for field in ("purchased_at", "expires_at", "location"):
+        if field in sent:
+            setattr(item, field, sent[field])
     await db.flush()
     return item

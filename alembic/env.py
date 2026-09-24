@@ -1,24 +1,23 @@
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from alembic import context
+from app.ai import models as _ai_models  # noqa: F401
 from app.core.config import get_settings
 from app.core.database import Base
+from app.ingredients import models as _ingredients_models  # noqa: F401
+from app.inventory import models as _inventory_models  # noqa: F401   
+from app.meal_plans import models as _meal_plans_models  # noqa: F401
+from app.nutrition import models as _nutrition_models  # noqa: F401
+from app.recipes import models as _recipes_models  # noqa: F401
+from app.shopping import models as _shopping_models  # noqa: F401
 
 # Import all model modules here so that `target_metadata` sees every table
 # when running `alembic revision --autogenerate`. Add per domain as we go:
 from app.users import models as _users_models  # noqa: F401
-from app.ingredients import models as _ingredients_models  # noqa: F401
-from app.recipes import models as _recipes_models  # noqa: F401
-from app.nutrition import models as _nutrition_models  # noqa: F401
-from app.meal_plans import models as _meal_plans_models  # noqa: F401
-from app.inventory import models as _inventory_models  # noqa: F401   
-from app.shopping import models as _shopping_models  # noqa: F401
-from app.ai import models as _ai_models  # noqa: F401
-
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)

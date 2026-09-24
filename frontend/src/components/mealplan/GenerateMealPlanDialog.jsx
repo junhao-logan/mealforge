@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
+import { planLabel } from '@/lib/meals'
 
 // 餐段: value 存后端, labelKey 显示
 const MEAL_OPTIONS = [
@@ -37,6 +38,7 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
         setMeals((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]))
     }
 
+    // 打开时按当前周 / 当前计划重新填默认值(之前只在关闭时重置, 换了周再打开还是旧日期)
     function reset() {
         setDays(7); setMeals(['lunch', 'dinner'])
         setStartDate(defaultStart || ''); setFreeText(''); setIngredientSource('any')
@@ -70,21 +72,12 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
         }
     }
 
-    const planLabel = (p) => (p.plan_type === 'default'
-        ? t('mealPlans.defaultPlanName')
-        : (p.name || t('mealPlans.planFallback', { id: p.id })))
-
     return (
-        <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset() }}>
-            <DialogTrigger asChild>
-                <span
-                    role="button"
-                    tabIndex={0}
-                    className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                >
-                    <Sparkles className="h-4 w-4" />
-                    {t('mealPlans.aiPlan')}
-                </span>
+        <Dialog open={open} onOpenChange={(o) => { if (o) reset(); setOpen(o) }}>
+            {/* Base UI 的 Trigger 本身渲染成原生 <button>: 样式直接写在上面, 不再包一层 span(旧的 asChild 写法在 Base UI 里无效) */}
+            <DialogTrigger className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+                <Sparkles className="h-4 w-4" />
+                {t('mealPlans.aiPlan')}
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>
@@ -175,7 +168,7 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
                         >
                             <option value="">{t('mealPlans.newPlan')}</option>
                             {plans.map((p) => (
-                                <option key={p.id} value={p.id}>{planLabel(p)}</option>
+                                <option key={p.id} value={p.id}>{planLabel(p, t)}</option>
                             ))}
                         </select>
                     </div>

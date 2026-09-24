@@ -70,14 +70,14 @@ function ShoppingLists() {
             setError(null)
             const data = await call(api.get, '/shopping-lists')
             setLists(data || [])
-            // 默认选第一个
-            if (data?.length > 0 && activeId === null) setActiveId(data[0].id)
+            // 默认选第一个(函数式更新: 不依赖 activeId, 切换清单时不会重新拉整个列表)
+            if (data?.length > 0) setActiveId((prev) => prev ?? data[0].id)
         } catch (e) {
             setError(e.message || t('common.loadFailed'))
         } finally {
             setLoading(false)
         }
-    }, [call, activeId, t])
+    }, [call, t])
 
     const loadDetail = useCallback(async (id) => {
         if (!id) { setDetail(null); return }
@@ -239,6 +239,14 @@ function ShoppingLists() {
                     checkoutItems={buildCheckoutItems(rows, checkout, t)}
                     onClose={() => setShowCheckout(false)}
                     onDone={() => { setCheckout({}); loadDetail(activeId) }}
+                    onPartial={(doneIds) => {
+                        setCheckout((p) => {
+                            const next = { ...p }
+                            for (const id of doneIds) delete next[id]
+                            return next
+                        })
+                        loadDetail(activeId)
+                    }}
                 />
             )}
         </div>

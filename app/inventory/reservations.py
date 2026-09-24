@@ -20,7 +20,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ingredients.models import Ingredient
+from app.ingredients.access import ingredient_briefs
 from app.inventory.models import EntryBatchPick, InventoryItem
 from app.meal_plans.models import MealPlan, MealPlanEntry
 from app.meal_plans.services import line_demand, meal_type_sort_key
@@ -54,7 +54,8 @@ class _Line:
     left: Decimal = _ZERO                                # 还没分到的量
 
 
-def _q(v: Decimal) -> Decimal:
+def quantize_amount(v: Decimal) -> Decimal:
+    """需求量统一量化到 0.01(对齐 Numeric(10,2))。预留视图与真实扣减共用, 两边算出来的数一致。"""
     return v.quantize(_CENT)
 
 
@@ -108,7 +109,7 @@ async def compute_reservations(
                 ln.need += line_demand(ri, e)
         for per_entry in lines.values():
             for ln in per_entry.values():
-                ln.need = _q(ln.need)
+                ln.need = quantize_amount(ln.need)
                 ln.left = ln.need
 
     # ── 3. 当前有余量的批次(FEFO 序) ──
@@ -199,15 +200,9 @@ async def compute_reservations(
         })
 
     # 食材名 + 规范单位(批次 / 需求涉及的全部食材; 前端不必再分页拉 /ingredients)
-    ing_ids = {b.ingredient_id for b in batches} | {
-        i for per in lines.values() for i in per
-    }
-    ingredients = {}
-    if ing_ids:
-        for ing in (await db.execute(
-            select(Ingredient).where(Ingredient.id.in_(ing_ids))
-        )).scalars().all():
-            ingredients[ing.id] = {"name": ing.name, "unit": ing.nutrition_basis_unit or "g"}
+    ingredients = await ingredient_briefs(
+        db, {b.ingredient_id for b in batches} | {i for per in lines.values() for i in per}
+    )
 
     return {
         "today": today,

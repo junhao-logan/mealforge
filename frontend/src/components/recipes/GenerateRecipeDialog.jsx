@@ -65,15 +65,10 @@ export function GenerateRecipeDialog({ onGenerated }) {
 
     return (
         <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset() }}>
-            <DialogTrigger asChild>
-                <span
-                    role="button"
-                    tabIndex={0}
-                    className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                >
-                    <ChefHat className="h-4 w-4" />
-                    {t('recipes.aiGenerate')}
-                </span>
+            {/* Base UI 的 Trigger 本身渲染成原生 <button>: 样式直接写在上面, 不再包一层 span(旧的 asChild 写法在 Base UI 里无效) */}
+            <DialogTrigger className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800">
+                <ChefHat className="h-4 w-4" />
+                {t('recipes.aiGenerate')}
             </DialogTrigger>
             <DialogContent>
                 <DialogHeader>

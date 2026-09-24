@@ -1,17 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from redis.asyncio import Redis
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.core.cache import invalidate_all_summaries
 from app.core.database import get_db
-from app.users.models import User
+from app.core.redis import get_redis
 from app.nutrition.models import UserNutritionGoal
 from app.nutrition.schemas import (
-    BodyMetricsUpdate, BodyMetricsRead,
-    NutritionGoalCompute, NutritionGoalOverride, NutritionGoalRead,
+    BodyMetricsRead,
+    BodyMetricsUpdate,
+    NutritionGoalCompute,
+    NutritionGoalOverride,
+    NutritionGoalRead,
 )
 from app.nutrition.services import compute_nutrition_goal
+from app.users.models import User
 
 router = APIRouter(prefix="/users/me", tags=["nutrition"])
 
@@ -40,6 +46,7 @@ async def compute_goal(
     payload: NutritionGoalCompute,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> UserNutritionGoal:
     # 算之前必须身体数据填齐
     missing = [
@@ -61,6 +68,8 @@ async def compute_goal(
     goal = await _upsert_goal(
         db, user.id, payload.goal_type, result, is_custom=False
     )
+    # 每日汇总缓存里带着目标与达成率, 目标变了要全部失效(否则最多旧 1 小时)
+    await invalidate_all_summaries(redis, user.id)
     return goal
 
 
@@ -71,6 +80,7 @@ async def override_goal(
     payload: NutritionGoalOverride,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> UserNutritionGoal:
     values = {
         "daily_calories": payload.daily_calories,
@@ -81,6 +91,7 @@ async def override_goal(
     goal = await _upsert_goal(
         db, user.id, payload.goal_type, values, is_custom=True
     )
+    await invalidate_all_summaries(redis, user.id)
     return goal
 
 
@@ -107,7 +118,8 @@ async def _upsert_goal(db, user_id, goal_type, values: dict, *, is_custom: bool)
         user_id=user_id, goal_type=goal_type, is_custom=is_custom, **values,
     ).on_conflict_do_update(
         index_elements=["user_id"],
-        set_={"goal_type": goal_type, "is_custom": is_custom, **values},
+        # 更新分支也要刷新 updated_at(onupdate 只对 ORM UPDATE 生效, 对 upsert 不生效)
+        set_={"goal_type": goal_type, "is_custom": is_custom, **values, "updated_at": func.now()},
     ).returning(UserNutritionGoal)
     result = await db.execute(stmt)
     await db.commit()

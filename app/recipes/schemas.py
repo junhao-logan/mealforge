@@ -1,14 +1,14 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasPath, BaseModel, ConfigDict, Field
 
 # ---------- 入参(创建用,Create 后缀) ----------
 
 class RecipeIngredientCreate(BaseModel):
     """配料入参:用户填'用户单位',克数由后端 D5 换算,不在入参里。"""
     ingredient_id: int
-    input_amount: Decimal = Field(gt=0)        # 必须 > 0
+    input_amount: Decimal = Field(gt=0, le=100_000)   # 必须 > 0; 上限防列溢出
     input_unit: str = Field(min_length=1)      # 'g' 或该食材的 default_unit(service 校验)
 
 
@@ -19,7 +19,7 @@ class RecipeVariantCreate(BaseModel):
     instructions: str = Field(min_length=1)
     cooking_time_minutes: int | None = Field(default=None, ge=0)
     difficulty: str | None = None
-    servings: int = Field(default=1, ge=1)
+    servings: int = Field(default=1, ge=1, le=100)
     ingredients: list[RecipeIngredientCreate] = Field(min_length=1)  # 至少一条配料
 
 
@@ -40,6 +40,10 @@ class RecipeIngredientRead(BaseModel):
     quantity_grams: Decimal       # 算好的克
     input_amount: Decimal         # 原始输入(D7 显示用)
     input_unit: str
+    # 食材名随配料返回(前端不必再拉 /ingredients, 该列表有 100 条上限, 超出的会显示成 #id)
+    ingredient_name: str | None = Field(
+        default=None, validation_alias=AliasPath("ingredient", "name")
+    )
 
 
 class RecipeVariantRead(BaseModel):
@@ -81,6 +85,8 @@ class RecipeListItem(BaseModel):
     name: str
     cuisine: str | None
     source: str
+    # 第一个做法的 id: 排餐直接用它, 不必为每道菜再请求一次详情(原来 1 + N 个请求)
+    default_variant_id: int | None = None
 
 class MissingIngredient(BaseModel):
     id: int

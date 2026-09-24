@@ -1,7 +1,12 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# 餐段取值(排序见 services.MEAL_TYPE_ORDER)。所有写入口共用, 防止 "brunch" 之类脏值入库
+MEAL_TYPE_PATTERN = "^(breakfast|lunch|dinner|snack)$"
+# 数量上限: 远低于 Numeric(10,2) / Numeric(8,2) 的列上限, 超出直接 422 而不是入库时 500
+AMOUNT_MAX = 100_000
 
 # ---------- 计划 ----------
 
@@ -30,9 +35,9 @@ class MealPlanListItem(BaseModel):
 class MealPlanEntryCreate(BaseModel):
     """往计划加一条 entry。"""
     scheduled_date: date
-    meal_type: str = Field(pattern="^(breakfast|lunch|dinner|snack)$")
+    meal_type: str = Field(pattern=MEAL_TYPE_PATTERN)
     recipe_variant_id: int
-    servings: Decimal = Field(default=Decimal("1.0"), gt=0)
+    servings: Decimal = Field(default=Decimal("1.0"), gt=0, le=50)
     sort_order: int = Field(default=0, ge=0)
     notes: str | None = None
 
@@ -83,9 +88,9 @@ class MealPlanRead(BaseModel):
 class QuickLogCreate(BaseModel):
     """快捷记录一餐 → 自动进 default plan。date 默认今天。"""
     scheduled_date: date | None = None  # None = 今天(router 里填)
-    meal_type: str = Field(pattern="^(breakfast|lunch|dinner|snack)$")
+    meal_type: str = Field(pattern=MEAL_TYPE_PATTERN)
     recipe_variant_id: int
-    servings: Decimal = Field(default=Decimal("1.0"), gt=0)
+    servings: Decimal = Field(default=Decimal("1.0"), gt=0, le=50)
     notes: str | None = None
 
 
@@ -141,11 +146,24 @@ class EntryCompleteRead(BaseModel):
 # ---------- AI 周计划: 草稿(生成) + 提交(确认) ----------
 
 class NewRecipeIngredient(BaseModel):
-    """现编菜谱的一条配料: 引用已有食材(ingredient_id) 或 新建(new_name)。"""
+    """现编菜谱的一条配料: 引用已有食材(ingredient_id) 或 新建(new_name)。
+    两个都给时以 ingredient_id 为准(AI 常把名字也带上); 落库逻辑同样优先用 id。"""
     ingredient_id: int | None = None
-    new_name: str | None = None
-    amount: Decimal = Field(gt=0)              # 已有食材用其单位; 新食材用克
-    per100g: dict | None = None               # 仅新食材: AI 估每 100g 营养
+    new_name: str | None = Field(default=None, max_length=100)
+    amount: Decimal = Field(gt=0, le=AMOUNT_MAX)   # 已有食材用其单位; 新食材用克
+    per100g: dict | None = None                    # 仅新食材: AI 估每 100g 营养
+
+    @field_validator("new_name", mode="before")
+    @classmethod
+    def _blank_name_is_none(cls, v):
+        return v.strip() or None if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _has_source(self):
+        # 两个都缺: 落库时 None.lower() → 500
+        if self.ingredient_id is None and self.new_name is None:
+            raise ValueError("每条配料需提供 ingredient_id 或 new_name")
+        return self
 
 
 class NewRecipeDraft(BaseModel):
@@ -153,7 +171,7 @@ class NewRecipeDraft(BaseModel):
     name: str
     instructions: str
     cuisine: str | None = None
-    servings: Decimal | None = None
+    servings: Decimal | None = Field(default=None, gt=0, le=50)
     ingredients: list[NewRecipeIngredient] = Field(min_length=1)
 
 
@@ -178,12 +196,19 @@ class MealPlanDraft(BaseModel):
 
 
 class MealPlanCommitEntry(BaseModel):
-    """确认时提交的一条餐次: 用已有 variant 或现编 new_recipe(确认时才落库)。"""
-    day_offset: int = Field(ge=0)
-    meal_type: str
-    servings: Decimal = Field(default=Decimal("1"), gt=0)
+    """确认时提交的一条餐次: 用已有 variant 或现编 new_recipe(二选一, 确认时才落库)。"""
+    day_offset: int = Field(ge=0, le=13)            # 与生成上限 days ≤ 14 对齐
+    meal_type: str = Field(pattern=MEAL_TYPE_PATTERN)
+    servings: Decimal = Field(default=Decimal("1"), gt=0, le=50)
     recipe_variant_id: int | None = None
     new_recipe: NewRecipeDraft | None = None
+
+    @model_validator(mode="after")
+    def _one_source(self):
+        # 两个都缺: 之前会把 None 放进待校验集合, 排序时 TypeError → 500
+        if (self.recipe_variant_id is None) == (self.new_recipe is None):
+            raise ValueError("每条餐次需且只需提供 recipe_variant_id 或 new_recipe 之一")
+        return self
 
 
 class MealPlanCommitRequest(BaseModel):
