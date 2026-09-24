@@ -61,4 +61,4 @@ app/ingredients/seed_data/usda/
 # 临时 Neon 环境文件(含线上库密码, 迁移/种子用完即删)
 .env.neon
 # 临时 Upstash 环境文件(含 Redis 密码, 验证用完即删)
-.env.upstash
+.env.upstash*.zip
