@@ -187,6 +187,14 @@
   使"标记完成 + 扣库存 + 记流水"三表在单一事务内原子提交
 - **幂等**：`complete_entry` 遇 `is_completed=True` 直接返回，不重复扣减
 
+**补充（2026-09-21）：撤销完成餐次落地 —— 按 `source_entry_id` 净额回补** ✅ Week 12
+
+- 端点 `PATCH /meal-plans/{plan_id}/entries/{entry_id}/uncomplete`：`is_completed=False` + `restock_for_entry`，同一事务提交，并精准失效当天缓存
+- **不逐条反转，而是净额**：按 (批次, 食材) 对该 entry 的全部流水求和 `delta_grams`；净额为负（仍有未退的消耗）才回补 `-净额`，并记 `reason='meal_reversal'` 反向流水
+- **理由**：完成 → 撤销 → 再完成 → 再撤销 的循环中，逐条反转会重复退回；净额天然幂等
+- **依赖 I1**：零余量批次被保留，才能退回原批次（保留原过期日 / 储存区）；原批次已删（`inventory_item_id` 为 NULL）的跳过
+- 回补批次同样 `with_for_update()` 加行锁
+
 **补充（2026-07-23）：流水只记系统性消耗**
 
 - **记流水**：`purchase`（入库）、`meal_consumption`（做饭扣减）
@@ -365,7 +373,7 @@
   只需新 tool schema + 瘦包装, 不改调用逻辑(开闭原则)
 - **愿景**：第二版"已有不足时 AI 生成新菜谱补齐"(catalog 不够时调 generate_recipe, 主流程不变)
 
-### D-AI-愿景 — 生成来源演进（暂不实现，记录意图）
+### D-AI-愿景 — 生成来源演进（第二版已实现，第三版部分实现）
 
 食材清单来源可替换，主流程（拼 prompt→调 AI→校验→落库→记日志）不变：
 
@@ -373,6 +381,39 @@
 2. **第二版**：从库存 + 全库按要求选 —— grounding=更大清单（换"取清单"那一步）
 3. **第三版**：网络/知识热门菜谱 —— 放开 grounding + AI 联网 + I11(c) 自动建私有食材
    （突破"只能用给定食材"前提，与 I11 公开菜谱愿景勾连）
+
+**进度（2026-09-21）**：第二版已由 D-AI6 实现（grounding 从「已有菜谱」扩到「全部可见食材 palette」，并可现编）；
+第三版的「自动建私有食材」部分也已实现（按名去重后新建 `ai_generated` 私有食材），联网部分未做（见 BACKLOG E2）。
+
+### D-AI5 — AI 周计划：草稿 → 预览 → 确认入库 ✅ Week 12 实现
+
+- **拆成两个端点**：`POST /meal-plans/generate` 只返回草稿（除 AI 成功日志外不写库）；
+  `POST /meal-plans/generate/commit` 才把条目追加进目标计划（`target_plan_id=None` → 新建 `ai_generated` 计划）
+- **理由**：AI 输出总有不想要的条目；先落库再让用户删是「写完再撤销」，数据里会留下临时状态。
+  草稿模式下 AI 的错误在入库前就能被用户拦下，数据库只存用户认可的结果
+- **代价**：草稿存在前端内存，刷新 / 离开页面就丢 —— 这是**有意为之**（离开即放弃，不留孤儿草稿）；
+  commit 时后端必须**重新校验**（variant 可见性、新菜谱字段），不能信任前端回传的草稿
+- **食材来源**：`ingredient_source='inventory'` 时 catalog / palette 只限库存食材，排不满就少排，**不硬凑**
+- **预览 UI（D-F 延伸）**：草稿以闪烁的绿色虚线卡片直接铺进周/天视图（而非单独列表），只能删；目标计划在生成前选好
+- **语言**：前端把界面语言传给 `/generate`，prompt 要求所有生成文字用该语言
+
+### D-AI6 — AI 现编新菜谱 / 新食材：palette grounding + 按名去重 ✅ Week 12 实现
+
+- **混用**：`recipe_source='new'` 时，每个条目可以是已有 `recipe_variant_id`，也可以是完整的 `new_recipe`
+  （名、菜系、做法、配料 `[{ingredient_id | new_name, amount, per100g?}]`）；新菜谱**只在 commit 时入库**
+- **营养准确性的三层策略**（核心 trade-off，简历素材）：
+  1. **Grounding**：给 AI 一份可用食材 palette（id + 名 + 规范单位，上限 80），AI 优先按 id 引用 → 直接用库里的准确营养（多来自 USDA）
+  2. **按名去重**：AI 给的 `new_name` 在 commit 时按规范化名（小写 + 折叠空白）匹配全局或本人私有食材，命中就复用，**以库为准，不用 AI 估的数**
+  3. **AI 估算兜底**：只有真正查不到的食材才用 AI 估的每 100g 营养新建（`source='ai_generated'`，私有，克本位）
+- **备选方案（否决）**：生成时联网搜营养 —— 每个食材多一次搜索调用，贵且慢，结果质量不稳定；
+  改用免费的 USDA FoodData Central API 按名查更合适，推迟到 Phase 2（BACKLOG E2）
+- **多单位（推迟）**：AI 复用已有食材时沿用它的规范单位（允许 0.8 碗这类小数），不为同一食材新增第二套单位数据 ——
+  那需要 unit_options 表（原 D4 推迟项，BACKLOG E1）
+- **校验**：`_validate_plan` 对新菜谱检查名 / 做法 / 配料非空，每行要么 `ingredient_id` 在 palette 内、要么有 `new_name`，且 `amount > 0`
+- **未做**：去重命中后与 AI 估算差距过大时换食材 / 换菜（BACKLOG B4.4）
+- **无 schema 变更**：`source` 是 `String(20)` 无约束，`ai_generated` 直接可用，不需要迁移
+
+---
 
 ## R 系列 — 菜谱内容决策
 

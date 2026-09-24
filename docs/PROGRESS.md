@@ -9,10 +9,12 @@
 
 ## 当前状态
 
-- **Week 12 进行中** —— 软件迭代 + 国际化。
+- **Week 12 进行中** —— 软件迭代 + 国际化 + AI 周计划增强。
 - **线上**：前端 https://mealforge.pages.dev · 后端 API https://mealforge.fly.dev/docs（已部署，CI/CD 自动上线）。
 - **i18n 前端全部完成**：6 页 + 所有弹窗 + 单位标签 + 日期，全部可中英切换。
-- **下一步**：Phase 3（数据/后端层的语言收口）—— 见文末 backlog。
+- **AI 周计划增强完成**（阶段 A / A′ / B）：草稿→预览→确认入库、可现编新菜谱/新食材、跟随界面语言。
+- **后端测试**：116 passed。
+- **下一步**：A4/A5/A6 一组（餐次状态 ↔ 库存回补），先谈设计 —— 见 `BACKLOG.md`。
 
 ---
 
@@ -41,8 +43,28 @@
 - **翻译边界（trade-off / 简历素材）**：UI 文案 key-based 翻译 + localStorage 持久化；**明确区分"UI 文案 vs 用户/AI 生成数据"**——用户自建食材名、AI 菜谱正文保留创建语言，规避数据层双语化的成本与翻译准确性风险。
 - **进度**：前端 6 页（Dashboard/Inventory/Recipes/Meal Plans/Shopping/Nutrition）+ 全部弹窗 + 单位 + 日期已全部本地化，每批 `vite build` 通过后交付。
 
+### 5. 默认计划（Quick Log）保护
+- 问题：用户删掉默认计划后，排餐下拉框变空。
+- 后端 `GET /meal-plans` 列表前 `get_or_create_default_plan` **自动确保存在**；`DELETE` 遇 `plan_type='default'` 返回 400。
+- 前端隐藏默认计划的删除按钮，统一显示为「Quick Log」；排餐默认选中计划。+3 测试。
+
+### 6. 撤销已完成餐次（+ 退回库存）
+- 新端点 `PATCH /meal-plans/{plan_id}/entries/{entry_id}/uncomplete`：`is_completed=False` + `restock_for_entry` + 精准失效缓存。
+- **幂等设计（简历素材）**：不逐条反转，而是**按 `source_entry_id` 对流水净额聚合**，净消耗为负才回补，回补记 `reason='meal_reversal'` 反向流水。完成→撤销→再完成→再撤销循环不会重复回补；依赖 I1「零余量批次保留」才能退回原批次。+4 测试。
+
+### 7. AI 周计划增强 ⭐（决策，见 DECISIONS D-AI5 / D-AI6）
+- **阶段 A — 草稿 / 确认两步**：`POST /meal-plans/generate` 只返回草稿（除 AI 成功日志外不写库）；`POST /meal-plans/generate/commit` 才追加进目标计划（未选则新建 ai_generated 计划）。新增**食材来源**选项：任意 / 只用库存（只用库存时不硬凑，排不满就少排）。
+- **阶段 A′ — 预览内嵌**：草稿直接铺进周/天视图，显示为**闪烁的绿色虚线卡片**，只能删（不改份数）；底部确认条显示「放弃 / 确认加入（N）」；目标计划在生成弹窗里**事先选好**；离开页面草稿自动抹掉。
+- **阶段 B — 现编新菜谱 / 新食材**：新增**菜谱来源**选项：只用已有 / 允许现编。AI 可混用已有 variant 与 `new_recipe`，新菜谱**只在确认时入库**。
+  - Grounding：给 AI 一份「可用食材 palette」（id + 名 + 规范单位，上限 80；只用库存时限定库存食材），AI 按 id 引用已有食材 → 直接用库里的准确营养。
+  - 真·新食材：AI 估每 100g 营养；commit 时**按规范化名去重**（全局或本人私有），命中就复用库里的准确数据、不用 AI 估的；未命中才新建（`source='ai_generated'`，私有，克本位）。
+  - 语言：prompt 要求菜名、做法、新食材名都用界面语言 —— i18n Phase 3 的「AI 按界面语言生成」已完成。
+  - 草稿卡片：新菜谱带琥珀色 **New / 新** 标记。无 schema 变更，不需要迁移。+3 测试（新菜谱草稿 / commit 建食材+菜谱 / commit 按名去重）。
+- **推迟到 Phase 2**（见 BACKLOG E1/E2）：食材多单位（unit_options）、USDA API 按名补准确营养。
+
 ### 协作 / 环境踩坑
-- **交付方式**：完整文件打 zip，从 `frontend/` 解压覆盖；`cp /mnt/c/Users/*/Downloads/xxx.zip ~/projects/mealforge/frontend/`。
+- **交付方式**：完整文件打 zip。只改前端的从 `frontend/` 解压（`cp /mnt/c/Users/*/Downloads/xxx.zip ~/projects/mealforge/frontend/`）；前后端都改的从仓库根解压（`~/projects/mealforge/`）。
+- **重启后启动顺序**：先开 Docker Desktop → `sudo hwclock -s` → `docker compose up -d postgres redis` → `uv run alembic upgrade head` → 后端、前端**各开一个终端**（端口被占用时 `fuser -k 8000/tcp 5173/tcp`）。
 - **WSL 时钟漂移**：睡眠/重启后 Clerk 报 401「Invalid or expired token」→ `sudo hwclock -s` 对时；或 `wsl --shutdown` 重进。
 - **Vite 端口回退**：5173 被占会退 5174，后端 CORS 白名单只有 5173 → CORS 报错。用 `npm run dev -- --port 5173 --strictPort` 锁死。
 
@@ -70,12 +92,14 @@ React + Vite + 纯 JS + Tailwind + shadcn；6 个功能页（今日/库存/菜�
 
 ---
 
-## Backlog —— Phase 3（数据/后端层语言收口）
+## Backlog
 
-i18n 纯 UI 文案已全绿，剩下是"数据本身的语言"：
-1. **AI 按界面语言生成**（当前语言；若自由描述是别的语言就用那个）—— 改后端 prompt。
-2. **后端返回的错误串**（如"超出计划范围"）—— 目前前端靠 `.includes('超出计划范围')` 匹配中文，需后端本地化后收口（代码已加注释标记）。
-3. **种子食材/分类名双语**（15 个内置食材现为中文名）。
-4. 用户自建食材名、AI 菜谱正文 —— **保持创建语言**（设计边界，不改）。
+完整分层待办见 `BACKLOG.md`（项目文档）。摘要：
+
+1. **A4/A5/A6 一组**（餐次状态 ↔ 库存回补：库存区分已排未做/已完成、删除餐次退库存、零数量批次规则）—— 与 DECISIONS I1/I6 有冲突，先谈设计。
+2. **A8 采购缺口去重**（与 I8 双来源相关）。
+3. **i18n Phase 3 剩余**：后端错误串本地化（前端目前靠 `.includes('超出计划范围')` 匹配中文）、种子食材/分类名双语。用户自建食材名、AI 生成正文**保持创建语言**（设计边界，不改）。
+4. **B4.4** AI 新食材：命中已有食材但与 AI 估算差距大时，换食材或换菜（阶段 B 未做）。
+5. **Phase 2**：E1 食材多单位、E2 USDA API 补营养。
 
 其他既有 backlog：食材搜索前缀匹配（需 pg_trgm）、AddEntryDialog 逐个查 variant 的 N+1、月视图、缓存失效第二版（variant 营养变更反查影响天）、全仓 lint 清理。

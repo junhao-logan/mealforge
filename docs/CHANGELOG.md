@@ -734,3 +734,28 @@ Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成�
 **下一步**:Week 11 部署(Fly.io + Python 3.12 + S3/R2)
 
 **Week 10 状态:前端 6 页全功能完成 ✅**
+
+---
+
+## Week 12 — 迭代第二批：默认计划保护 + 撤销完成 + AI 周计划增强（2026-09-18 ~ 09-23）
+
+**完成**：
+- **i18n Phase 2 收尾**：6 页 + 全部弹窗 + 单位 + 日期中英可切换；新规矩：此后新 UI 文案一律走 `t()`，en/zh 同时加 key
+- **默认计划（Quick Log）保护**：列表端点自动确保存在；DELETE 拒绝删除 default；前端隐藏删除按钮；排餐默认选中计划（+3 测试）
+- **撤销已完成餐次**：`PATCH .../entries/{id}/uncomplete` + `restock_for_entry` 按 `source_entry_id` 净额回补，幂等（+4 测试）
+- **AI 周计划 阶段 A**：`/generate` 只返回草稿，`/generate/commit` 才入库；食材来源（任意 / 只用库存，不硬凑）；语言透传
+- **AI 周计划 阶段 A′**：草稿以闪烁的绿色虚线卡片铺进周/天视图，只能删；确认条；生成前选目标计划；离开页面抹掉草稿。按用户反馈去掉了份数编辑
+- **AI 周计划 阶段 B**：菜谱来源（已有 / 允许现编）；AI 混用已有 variant 与 `new_recipe`；新食材按规范化名去重，命中就复用库内准确营养，未命中才用 AI 估算新建；新菜谱只在确认时入库；生成文字跟随界面语言（+3 测试）
+- 后端测试 104 → **116 passed**；ruff（CI 范围）全绿；前端 `vite build` 通过
+
+**关键决策**：D-AI5（草稿 → 确认入库）、D-AI6（palette grounding + 按名去重 + AI 估算兜底）、I2 补充（净额回补）
+
+**踩坑**：
+- Cloudflare Pages 构建失败：asdf 装 `.python-version` 时拉 GitHub 插件偶发失败（`could not read Username`），与代码无关，Retry 即可
+- 两个 dev server 粘到同一终端 → 端口占用；`fuser -k 8000/tcp 5173/tcp` 后分两个终端启动
+- heredoc 生成的文件缺结尾换行会吞掉结束标记；ruff E501（中文长串）需要拆短
+- 本机 `grep -P` 不支持 `\p{Han}`，扫残留中文改用 ripgrep
+
+**推迟**：E1 食材多单位（unit_options）、E2 USDA API 按名补营养、B4.4 去重命中但与估算差距大时换食材
+
+**下一步**：A4/A5/A6 一组（餐次状态 ↔ 库存回补）先谈设计
