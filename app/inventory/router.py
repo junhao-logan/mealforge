@@ -1,17 +1,23 @@
 # app/inventory/router.py
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends,HTTPException
-
 from datetime import date
 
-from app.auth.dependencies import get_current_user
-from app.core.database import get_db
-from app.users.models import User
-from app.inventory import services
-from app.inventory.schemas import InventoryItemCreate, InventoryItemRead, InventoryItemUpdate
-from app.core.config import get_settings
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import get_current_user
+from app.core.config import get_settings
+from app.core.database import get_db
+from app.inventory import services
+from app.inventory.reservations import compute_reservations
+from app.inventory.schemas import (
+    InventoryItemCreate,
+    InventoryItemRead,
+    InventoryItemUpdate,
+    ReservationsRead,
+)
+from app.users.models import User
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 
@@ -49,6 +55,17 @@ async def list_inventory(
         )
         for item in items
     ]
+
+
+@router.get("/reservations", response_model=ReservationsRead)
+async def list_reservations(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """库存预留视图(A4): 今天及以后所有未完成餐次对各批次的预留 + 每餐明细 + 缺口。
+    读时模拟(手选优先, 其余 FEFO 且不用过期批次), 不落库。只读, 无副作用。
+    """
+    return await compute_reservations(db, user.id)
 
 
 @router.patch("/{item_id}", response_model=InventoryItemRead)

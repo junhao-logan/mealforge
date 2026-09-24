@@ -1,6 +1,6 @@
 # tests/inventory/test_fefo_deduction.py
 """FEFO 先进先出扣减的行为契约(招牌 deep-dive 故事的回归保护)。"""
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -19,8 +19,9 @@ from tests.factories import (
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-D1 = date(2026, 1, 10)   # 早过期
-D2 = date(2026, 1, 20)   # 晚过期
+# 过期日必须在未来: A4 起自动扣减不碰已过期批次(过期规则见 test_reservations.py)
+D1 = date.today() + timedelta(days=10)   # 早过期
+D2 = date.today() + timedelta(days=20)   # 晚过期
 
 
 async def _entry_needing(db, user, ingredient, grams, servings=1):

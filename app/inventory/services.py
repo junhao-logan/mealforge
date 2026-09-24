@@ -9,7 +9,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ingredients.models import Ingredient
-from app.inventory.models import InventoryItem, InventoryTransaction
+from app.inventory.models import EntryBatchPick, InventoryItem, InventoryTransaction
+from app.inventory.reservations import (
+    compute_reservations,
+    fefo_key,
+    hard_reserved,
+    is_expired,
+)
 from app.inventory.schemas import InventoryItemCreate, InventoryItemUpdate
 from app.meal_plans.models import MealPlanEntry
 from app.meal_plans.services import line_demand  # I13 需求公式(单一真相源)
@@ -84,66 +90,84 @@ async def list_inventory_items(db: AsyncSession, user_id) -> list[InventoryItem]
     return list((await db.execute(stmt)).scalars().all())
 
 async def deduct_for_entry(
-    db: AsyncSession, user_id, entry: MealPlanEntry
+    db: AsyncSession, user_id, entry: MealPlanEntry, *, today: date | None = None,
 ) -> list[dict]:
-    """完成餐次 → 按 FEFO 扣减库存(I1)。
-    · 需求 = RecipeIngredient.quantity_grams × entry.servings (I13: 配方倍数)
-    · 按 expires_at ASC NULLS LAST, purchased_at ASC NULLS LAST, id ASC 逐批扣(FEFO)
+    """完成餐次 → 扣减库存。规则与预留视图(reservations.py)完全一致, 显示什么就扣什么(A4):
+    1. 先扣该餐的**手选批次**(按勾选顺序, 过期的也可以 —— 用户自己选的)
+    2. 剩余需求按 FEFO 从**未过期**批次里扣; 过期批次自动分配绝不碰
+    3. 其他未完成餐次手选的量是硬预留, 这里要让开(可用 = 批次余量 − 别人手选的)
+    · 需求 = RecipeIngredient.quantity_grams × entry.servings (I13), 同食材多行合并
     · 扣到 0 不下穿; 不足部分作为短缺返回, 不写回库存(I1)
     · 每笔扣减记 meal_consumption 流水, 关联 source_entry_id (I2)
     不 commit —— 由 router 与 entry.is_completed 同事务提交。
     返回: [{"ingredient_id": int, "shortfall_grams": Decimal}, ...]
     """
-    # 1) 取这道菜的配料
+    today = today or date.today()
+
+    # 0) 其他餐次的手选硬预留(排除本餐)
+    others = hard_reserved(
+        await compute_reservations(db, user_id, today=today, exclude_entry_id=entry.id)
+    )
+
+    # 1) 这道菜的配料, 同食材合并需求(保持配方顺序)
     ri_stmt = select(RecipeIngredient).where(
         RecipeIngredient.recipe_variant_id == entry.recipe_variant_id
-    )
-    recipe_ingredients = list((await db.execute(ri_stmt)).scalars().all())
+    ).order_by(RecipeIngredient.id)
+    needs: dict[int, Decimal] = {}
+    for ri in (await db.execute(ri_stmt)).scalars().all():
+        needs[ri.ingredient_id] = needs.get(ri.ingredient_id, Decimal("0")) + line_demand(ri, entry)
+
+    # 2) 本餐手选(按勾选顺序)
+    picks: dict[int, list[int]] = {}
+    for p in (await db.execute(
+        select(EntryBatchPick)
+        .where(EntryBatchPick.entry_id == entry.id)
+        .order_by(EntryBatchPick.position)
+    )).scalars().all():
+        picks.setdefault(p.ingredient_id, []).append(p.inventory_item_id)
 
     shortfalls: list[dict] = []
 
-    for ri in recipe_ingredients:
-        needed = line_demand(ri, entry)   # I13 需求公式(见 meal_plans.services)
-
-        # 2) 取该食材的可用批次, FEFO 序(与 list 展示同序)
+    for ingredient_id, needed in needs.items():
+        # 3) 该食材的可用批次(行锁: 防并发完成餐次时重复扣同一批次)
         batch_stmt = (
             select(InventoryItem)
             .where(
                 InventoryItem.user_id == user_id,
-                InventoryItem.ingredient_id == ri.ingredient_id,
+                InventoryItem.ingredient_id == ingredient_id,
                 InventoryItem.quantity_grams > 0,      # 跳过扣光的零批次
             )
-            .order_by(
-                InventoryItem.expires_at.asc().nulls_last(),
-                InventoryItem.purchased_at.asc().nulls_last(),
-                InventoryItem.id.asc(), 
-            )
-            .with_for_update()   # 行锁: 防并发完成餐次时重复扣同一批次
+            .with_for_update()
         )
-        batches = list((await db.execute(batch_stmt)).scalars().all())
+        batches = sorted((await db.execute(batch_stmt)).scalars().all(), key=fefo_key)
+        by_id = {b.id: b for b in batches}
 
-        # 3) 逐批扣, 扣光就下一批
         remaining = needed
-        for b in batches:
+        # 3a) 手选批次优先(按勾选顺序), 3b) 其余走 FEFO, 只用未过期批次
+        order = [by_id[bid] for bid in picks.get(ingredient_id, ()) if bid in by_id]
+        order += [b for b in batches if not is_expired(b.expires_at, today)]
+        for b in order:
             if remaining <= 0:
                 break
-            take = min(b.quantity_grams, remaining)   # 这批最多能给多少
+            avail = b.quantity_grams - others.get(b.id, Decimal("0"))   # 让开别人手选的
+            take = min(avail, remaining)
+            if take <= 0:
+                continue
             b.quantity_grams -= take                  # 扣(ORM 追踪, flush 时 UPDATE)
             remaining -= take
-
             db.add(InventoryTransaction(
                 user_id=user_id,
-                ingredient_id=ri.ingredient_id,
+                ingredient_id=ingredient_id,
                 inventory_item_id=b.id,
                 delta_grams=-take,                    # 扣减为负
                 reason="meal_consumption",
                 source_entry_id=entry.id,             # 谁导致的
             ))
 
-        # 4) 批次扣完还不够 → 记短缺(不写回库存, I1)
+        # 4) 还不够 → 记短缺(不写回库存, I1)
         if remaining > 0:
             shortfalls.append({
-                "ingredient_id": ri.ingredient_id,
+                "ingredient_id": ingredient_id,
                 "shortfall_grams": remaining,
             })
 

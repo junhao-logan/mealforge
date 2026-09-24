@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
+import { unitLabel } from '@/lib/units'
 
 // 储存区: value 存后端, labelKey 显示('' = 未指定)
 const ZONES = [
@@ -17,7 +18,7 @@ const ZONES = [
     { value: '', labelKey: 'inventory.zoneUnspecified' },
 ]
 
-export function EditInventoryDialog({ item, name, onClose, onSaved }) {
+export function EditInventoryDialog({ item, name, unit, onClose, onSaved }) {
     const { t } = useTranslation()
     const { call } = useApi()
     const [quantity, setQuantity] = useState('')
@@ -29,7 +30,7 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
     // 打开时预填当前值
     useEffect(() => {
         if (item) {
-            setQuantity(item.quantity_grams != null ? Number(item.quantity_grams).toFixed(0) : '')
+            setQuantity(item.quantity_grams != null ? String(Number(Number(item.quantity_grams).toFixed(2))) : '')
             setExpiresAt(item.expires_at || '')
             setLocation(['fridge', 'freezer', 'pantry'].includes(item.location) ? item.location : '')
             setError(null)
@@ -65,9 +66,9 @@ export function EditInventoryDialog({ item, name, onClose, onSaved }) {
                 </DialogHeader>
                 <div className="space-y-4">
                     <div>
-                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.quantityGrams')}</label>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.quantityUnit', { unit: unitLabel(unit || 'g') })}</label>
                         <input
-                            type="number" min="0" autoFocus
+                            type="number" min="0" step="any" autoFocus
                             className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                             value={quantity}
                             onChange={(e) => setQuantity(e.target.value)}

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from redis.asyncio import Redis
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +20,9 @@ from app.core.cache import cache_get, cache_set, invalidate_summary, summary_key
 from app.core.database import get_db
 from app.core.redis import get_redis
 from app.inventory import services as inventory_services
+from app.inventory.models import EntryBatchPick, InventoryItem
+from app.inventory.reservations import compute_reservations
+from app.inventory.schemas import EntryPicksUpdate
 from app.meal_plans.models import MealPlan, MealPlanEntry
 from app.meal_plans.schemas import (
     CalendarEntryRead,
@@ -42,7 +45,7 @@ from app.meal_plans.services import (
     meal_type_sort_key,
 )
 from app.nutrition.models import UserNutritionGoal
-from app.recipes.models import Recipe, RecipeVariant
+from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
 from app.users.models import User
 
 router = APIRouter(prefix="/meal-plans", tags=["meal-plans"])
@@ -521,3 +524,68 @@ async def uncomplete_entry(
     await invalidate_summary(redis, user.id, entry.scheduled_date)  # 失效该天
 
     return entry
+
+@router.put("/{plan_id:int}/entries/{entry_id}/picks", status_code=204)
+async def set_entry_picks(
+    plan_id: int,
+    entry_id: int,
+    payload: EntryPicksUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """A4: 设定某餐某食材用哪几批(按列表顺序取够, 不够的部分仍自动分配)。
+    只能选「还没被其他餐次预留」的余量(本餐自己当前占的也算可选)。过期批次可手选。
+    空列表 = 清掉手选, 恢复自动分配。整组替换, 不做增量。
+    """
+    entry = await _get_owned_entry(db, plan_id, entry_id, user)
+    if entry.is_completed:
+        raise HTTPException(400, "Meal already completed; batches can no longer be changed")
+
+    ids = payload.inventory_item_ids
+    if len(set(ids)) != len(ids):
+        raise HTTPException(400, "Duplicate batch in selection")
+
+    in_recipe = (await db.execute(
+        select(RecipeIngredient.id).where(
+            RecipeIngredient.recipe_variant_id == entry.recipe_variant_id,
+            RecipeIngredient.ingredient_id == payload.ingredient_id,
+        ).limit(1)
+    )).scalar_one_or_none()
+    if in_recipe is None:
+        raise HTTPException(400, "Ingredient is not used by this meal")
+
+    if ids:
+        items = {
+            it.id: it for it in (await db.execute(
+                select(InventoryItem).where(InventoryItem.id.in_(ids))
+            )).scalars().all()
+        }
+        # 可选量 = 批次未预留 + 本餐当前从它取的(与前端显示同一口径)
+        res = await compute_reservations(db, user.id)
+        free = {b["batch_id"]: b["free"] for b in res["batches"]}
+        own: dict[int, Decimal] = {}
+        for e in res["entries"]:
+            if e["entry_id"] != entry.id:
+                continue
+            for ln in e["lines"]:
+                if ln["ingredient_id"] == payload.ingredient_id:
+                    for a in ln["allocations"]:
+                        own[a["batch_id"]] = own.get(a["batch_id"], Decimal("0")) + a["amount"]
+        for bid in ids:
+            it = items.get(bid)
+            if (it is None or it.user_id != user.id
+                    or it.ingredient_id != payload.ingredient_id):
+                raise HTTPException(400, f"Batch {bid} is not available for this ingredient")
+            if free.get(bid, Decimal("0")) + own.get(bid, Decimal("0")) <= 0:
+                raise HTTPException(400, f"Batch {bid} is fully reserved by other meals")
+
+    await db.execute(delete(EntryBatchPick).where(
+        EntryBatchPick.entry_id == entry.id,
+        EntryBatchPick.ingredient_id == payload.ingredient_id,
+    ))
+    for pos, bid in enumerate(ids):
+        db.add(EntryBatchPick(
+            entry_id=entry.id, ingredient_id=payload.ingredient_id,
+            inventory_item_id=bid, position=pos,
+        ))
+    await db.commit()

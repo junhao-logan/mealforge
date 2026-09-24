@@ -12,8 +12,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -119,4 +121,38 @@ class InventoryTransaction(Base):
         Index("idx_inventory_transactions_source_entry", "source_entry_id"),
         # 支撑按时间清理旧流水(90天保留策略)
         Index("idx_inventory_transactions_occurred", "occurred_at"),
+    )
+
+class EntryBatchPick(Base):
+    """餐次手选批次(A4): 用户指定某餐的某食材用哪几批, 按 position 顺序取够。
+
+    手选 = 硬预留(持久化); 其余需求仍由读时模拟 FEFO 自动分配(I6 不落库)。
+    · 取量不存: 按顺序从勾选批次取, 取够为止, 不够的部分再走自动分配
+    · 餐次删 / 批次删 → CASCADE 一并删(批次没了, 这行自然回到自动分配)
+    """
+    __tablename__ = "entry_batch_picks"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    entry_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("meal_plan_entries.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ingredient_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("ingredients.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    inventory_item_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("inventory_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)   # 勾选顺序, 0 起
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("entry_id", "inventory_item_id"),   # 同餐同批只选一次
+        Index("idx_entry_batch_picks_entry", "entry_id"),
+        Index("idx_entry_batch_picks_item", "inventory_item_id"),
     )

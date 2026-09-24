@@ -44,3 +44,72 @@ class InventoryItemRead(BaseModel):
     expiry_status: str | None = None
     created_at: datetime
     updated_at: datetime
+
+# ── A4 库存预留视图(读时模拟, 见 reservations.py) ──
+
+class BatchAllocation(BaseModel):
+    """某批次被某餐次预留的量。manual=True 为手选(硬预留)。"""
+    entry_id: int
+    amount: Decimal
+    manual: bool
+
+
+class BatchReservation(BaseModel):
+    batch_id: int
+    ingredient_id: int
+    quantity: Decimal          # 批次当前余量(规范单位)
+    reserved: Decimal          # 被未完成餐次预留的量
+    free: Decimal              # 未预留 = quantity − reserved
+    expired: bool
+    allocations: list[BatchAllocation]   # 按餐次先后
+
+
+class LineAllocation(BaseModel):
+    batch_id: int
+    amount: Decimal
+    manual: bool
+
+
+class EntryLine(BaseModel):
+    """一餐一食材: 需要多少、从哪些批次取、手选了哪些、还缺多少。"""
+    ingredient_id: int
+    need: Decimal
+    picked_batch_ids: list[int]
+    allocations: list[LineAllocation]
+    shortfall: Decimal
+
+
+class EntryReservation(BaseModel):
+    entry_id: int
+    plan_id: int
+    plan_name: str | None
+    plan_type: str
+    scheduled_date: date
+    meal_type: str
+    recipe_name: str
+    servings: Decimal
+    lines: list[EntryLine]
+
+
+class ShortfallRow(BaseModel):
+    ingredient_id: int
+    amount: Decimal
+
+
+class IngredientBrief(BaseModel):
+    name: str
+    unit: str                  # 规范单位(g / ml / 块 ...)
+
+
+class ReservationsRead(BaseModel):
+    today: date
+    batches: list[BatchReservation]
+    entries: list[EntryReservation]
+    shortfalls: list[ShortfallRow]
+    ingredients: dict[int, IngredientBrief]
+
+
+class EntryPicksUpdate(BaseModel):
+    """设定某餐某食材的手选批次(按列表顺序取够)。空列表 = 恢复自动分配。"""
+    ingredient_id: int
+    inventory_item_ids: list[int] = Field(default_factory=list, max_length=50)

@@ -1,46 +1,57 @@
-// src/pages/InventoryPage.jsx —— 库存页(三区展示 + 渐变卡片 + 加库存 + 删除)
-import { Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+// src/pages/InventoryPage.jsx —— 库存页(A4)
+// 三区展示; 同一区的同一食材合并成一张卡片, 可展开看各批次被哪些餐次预留。
+// 预留来自 GET /inventory/reservations(读时模拟 FEFO + 手选, 不落库)。
+import { ArrowUpDown } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router'
 
 import { AddInventoryDialog } from '@/components/inventory/AddInventoryDialog'
 import { EditInventoryDialog } from '@/components/inventory/EditInventoryDialog'
-import { Card } from '@/components/ui/card'
+import { IngredientGroupCard } from '@/components/inventory/IngredientGroupCard'
+import { MealReservationDialog } from '@/components/inventory/MealReservationDialog'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
-import { daysUntil, expiryColor, expiryLabel, sortKey } from '@/lib/expiry'
+import { daysUntil, sortKey } from '@/lib/expiry'
+import { fmtAmount, groupInventory } from '@/lib/inventoryView'
 
-// 区域: key 用于过滤/存储, labelKey 用于 i18n 显示
+// 区域: key 用于过滤, labelKey 用于 i18n 显示
 const ZONES = [
     { key: 'pantry', labelKey: 'inventory.zonePantry', accent: 'border-t-amber-400' },
     { key: 'fridge', labelKey: 'inventory.zoneFridge', accent: 'border-t-sky-400' },
     { key: 'freezer', labelKey: 'inventory.zoneFreezer', accent: 'border-t-indigo-400' },
 ]
-const ZONED_KEYS = ['pantry', 'fridge', 'freezer']
 // 未指定区(灰): location 不在三区(含 null)。采购回流未分区的落这里。
 const UNZONED_ZONE = { key: 'unzoned', labelKey: 'inventory.zoneUnzoned', accent: 'border-t-slate-300' }
+
+// 「未预留」排前/排后: 每个浏览器自己记住(纯显示偏好)
+const SORT_KEY = 'mf_inv_free_first'
+function readFreeFirst() {
+    try { return localStorage.getItem(SORT_KEY) !== '0' } catch { return true }
+}
 
 export function InventoryPage() {
     const { t } = useTranslation()
     const { call } = useApi()
     const [items, setItems] = useState([])
-    const [ingredients, setIngredients] = useState({})
+    const [res, setRes] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [editItem, setEditItem] = useState(null)
+    const [mealId, setMealId] = useState(null)
+    const [expanded, setExpanded] = useState(() => new Set())
+    const [freeFirst, setFreeFirst] = useState(readFreeFirst)
 
-    // 加载库存 + 食材映射。抽成 reload 供加/删后刷新(复用)
+    // 库存批次 + 预留视图, 并行拉。加/删/改/手选后都复用它刷新
     const reload = useCallback(async () => {
         try {
             setError(null)
-            const [inv, ings] = await Promise.all([
+            const [inv, reservations] = await Promise.all([
                 call(api.get, '/inventory'),
-                call(api.get, '/ingredients'),
+                call(api.get, '/inventory/reservations'),
             ])
             setItems(inv || [])
-            const map = {}
-            for (const ing of ings || []) map[ing.id] = ing.name
-            setIngredients(map)
+            setRes(reservations)
         } catch (e) {
             setError(e.message || t('common.loadFailed'))
         } finally {
@@ -49,6 +60,33 @@ export function InventoryPage() {
     }, [call, t])
 
     useEffect(() => { reload() }, [reload])
+
+    const groups = useMemo(() => groupInventory(items, res), [items, res])
+    const entriesById = useMemo(
+        () => Object.fromEntries((res?.entries || []).map((e) => [e.entry_id, e])),
+        [res],
+    )
+    const shortByIng = useMemo(
+        () => Object.fromEntries((res?.shortfalls || []).map((s) => [s.ingredient_id, Number(s.amount)])),
+        [res],
+    )
+    const ingInfo = (id) => res?.ingredients?.[id] || {}
+    const nameOf = (id) => ingInfo(id).name || t('inventory.food', { id })
+
+    function toggleExpand(key) {
+        setExpanded((prev) => {
+            const next = new Set(prev)
+            if (next.has(key)) next.delete(key); else next.add(key)
+            return next
+        })
+    }
+
+    function toggleSort() {
+        setFreeFirst((v) => {
+            try { localStorage.setItem(SORT_KEY, v ? '0' : '1') } catch { /* 存不了就只在本次生效 */ }
+            return !v
+        })
+    }
 
     async function handleDelete(id) {
         if (!confirm(t('inventory.confirmDelete'))) return
@@ -63,118 +101,104 @@ export function InventoryPage() {
     if (loading) return <PageState text={t('common.loading')} />
     if (error) return <PageState text={t('common.errorPrefix', { msg: error })} />
 
+    const hasUnzoned = groups.some((g) => g.zone === 'unzoned')
+    const zones = hasUnzoned ? [...ZONES, UNZONED_ZONE] : ZONES
+    const ingredientNames = Object.fromEntries(
+        Object.entries(res?.ingredients || {}).map(([id, v]) => [id, v.name]),
+    )
+
     return (
         <div>
-            <div className="mb-6 flex items-center justify-between">
+            <div className="mb-4 flex items-center justify-between">
                 <h1 className="text-2xl font-bold text-slate-900">{t('inventory.title')}</h1>
-                <AddInventoryDialog ingredients={ingredients} onAdded={reload} />
+                <div className="flex items-center gap-2">
+                    <button
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                        onClick={toggleSort}
+                    >
+                        <ArrowUpDown className="h-4 w-4" />
+                        {freeFirst ? t('inventory.sortFreeFirst') : t('inventory.sortFreeLast')}
+                    </button>
+                    <AddInventoryDialog ingredients={ingredientNames} onAdded={reload} />
+                </div>
             </div>
+
+            {/* 缺口提示: 计划中的餐次会缺的食材(含完全没库存的) */}
+            {res?.shortfalls?.length > 0 && (
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                    <div className="text-sm text-red-800">
+                        <span className="font-medium">{t('inventory.shortfallTitle')}</span>{' '}
+                        {res.shortfalls
+                            .map((s) => `${nameOf(s.ingredient_id)} ${fmtAmount(s.amount, ingInfo(s.ingredient_id).unit)}`)
+                            .join(t('inventory.listSep'))}
+                    </div>
+                    <Link
+                        to="/shopping"
+                        className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+                    >
+                        {t('inventory.goShopping')}
+                    </Link>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {ZONES.map((zone) => (
-                    <ZoneColumn
-                        key={zone.key}
-                        zone={zone}
-                        items={items.filter((it) => it.location === zone.key)}
-                        ingredients={ingredients}
-                        onDelete={handleDelete}
-                        onEdit={setEditItem}
-                    />
-                ))}
-                {/* 未指定区: 只在有未分区物品时显示 */}
-                {items.some((it) => !ZONED_KEYS.includes(it.location)) && (
-                    <ZoneColumn
-                        zone={UNZONED_ZONE}
-                        items={items.filter((it) => !ZONED_KEYS.includes(it.location))}
-                        ingredients={ingredients}
-                        onDelete={handleDelete}
-                        onEdit={setEditItem}
-                    />
-                )}
+                {zones.map((zone) => {
+                    const zoneGroups = groups
+                        .filter((g) => g.zone === zone.key)
+                        .sort((a, b) => sortKey(daysUntil(a.earliestExpiry)) - sortKey(daysUntil(b.earliestExpiry)))
+                    return (
+                        <div key={zone.key} className={`rounded-xl border-t-4 bg-white p-4 shadow-sm ${zone.accent}`}>
+                            <div className="mb-3 flex items-center justify-between">
+                                <h2 className="font-semibold text-slate-800">{t(zone.labelKey)}</h2>
+                                <span className="text-sm text-slate-400">{t('inventory.count', { count: zoneGroups.length })}</span>
+                            </div>
+                            <div className="space-y-2">
+                                {zoneGroups.length === 0 ? (
+                                    <p className="py-6 text-center text-sm text-slate-300">{t('inventory.empty')}</p>
+                                ) : (
+                                    zoneGroups.map((g) => (
+                                        <IngredientGroupCard
+                                            key={g.key}
+                                            group={g}
+                                            name={nameOf(g.ingredient_id)}
+                                            unit={ingInfo(g.ingredient_id).unit}
+                                            shortfall={shortByIng[g.ingredient_id] || 0}
+                                            entriesById={entriesById}
+                                            expanded={expanded.has(g.key)}
+                                            onToggle={() => toggleExpand(g.key)}
+                                            freeFirst={freeFirst}
+                                            onEdit={setEditItem}
+                                            onDelete={handleDelete}
+                                            onOpenMeal={setMealId}
+                                        />
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    )
+                })}
             </div>
 
-            {/* 编辑弹窗 */}
+            {/* 编辑批次 */}
             <EditInventoryDialog
                 item={editItem}
-                name={editItem ? (ingredients[editItem.ingredient_id] || t('inventory.food', { id: editItem.ingredient_id })) : ''}
+                name={editItem ? nameOf(editItem.ingredient_id) : ''}
+                unit={editItem ? ingInfo(editItem.ingredient_id).unit : undefined}
                 onClose={() => setEditItem(null)}
+                onSaved={reload}
+            />
+
+            {/* 餐次明细 + 选择批次 */}
+            <MealReservationDialog
+                entry={mealId != null ? entriesById[mealId] : null}
+                reservations={res}
+                items={items}
+                onClose={() => setMealId(null)}
                 onSaved={reload}
             />
         </div>
     )
 }
-
-function ZoneColumn({ zone, items, ingredients, onDelete, onEdit }) {
-    const { t } = useTranslation()
-    const sorted = [...items].sort(
-        (a, b) => sortKey(daysUntil(a.expires_at)) - sortKey(daysUntil(b.expires_at)),
-    )
-    return (
-        <div className={`rounded-xl border-t-4 bg-white p-4 shadow-sm ${zone.accent}`}>
-            <div className="mb-3 flex items-center justify-between">
-                <h2 className="font-semibold text-slate-800">{t(zone.labelKey)}</h2>
-                <span className="text-sm text-slate-400">{t('inventory.count', { count: items.length })}</span>
-            </div>
-            <div className="space-y-2">
-                {sorted.length === 0 ? (
-                    <p className="py-6 text-center text-sm text-slate-300">{t('inventory.empty')}</p>
-                ) : (
-                    sorted.map((it) => (
-                        <InventoryCard
-                            key={it.id}
-                            item={it}
-                            name={ingredients[it.ingredient_id]}
-                            onDelete={onDelete}
-                            onEdit={onEdit}
-                        />
-                    ))
-                )}
-            </div>
-        </div>
-    )
-}
-
-function InventoryCard({ item, name, onDelete, onEdit }) {
-    const { t } = useTranslation()
-    const days = daysUntil(item.expires_at)
-    const bg = expiryColor(days)
-    const label = expiryLabel(days)   // { variant } / null; 文案由 i18n 出
-    return (
-        <Card
-            className="group cursor-pointer border-0 p-3 shadow-none transition-shadow hover:shadow-md"
-            style={{ backgroundColor: bg }}
-            onClick={() => onEdit(item)}
-        >
-            <div className="flex items-start justify-between">
-                <span className="font-medium text-slate-900">
-                    {name || t('inventory.food', { id: item.ingredient_id })}
-                </span>
-                <div className="flex items-center gap-2">
-                    {label && (
-                        <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium text-white ${label.variant === 'expired' ? 'bg-red-600' : 'bg-amber-500'
-                                }`}
-                        >
-                            {label.variant === 'expired' ? t('inventory.expired') : t('inventory.expiring')}
-                        </span>
-                    )}
-                    <button
-                        className="text-slate-400 opacity-0 transition-opacity hover:text-red-500 group-hover:opacity-100"
-                        onClick={(e) => { e.stopPropagation(); onDelete(item.id) }}
-                        title={t('common.delete')}
-                    >
-                        <Trash2 className="h-4 w-4" />
-                    </button>
-                </div>
-            </div>
-            <div className="mt-1 text-xs text-slate-600">
-                {item.quantity_grams}g
-                {item.expires_at ? ` · ${t('inventory.expiresAt', { date: item.expires_at })}` : ` · ${t('inventory.noExpiry')}`}
-            </div>
-        </Card>
-    )
-}
-
 
 function PageState({ text }) {
     return (
