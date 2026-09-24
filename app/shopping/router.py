@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_current_user
 from app.core.database import get_db
+from app.core.dates import get_today
 from app.meal_plans.models import MealPlan
 from app.shopping.models import ShoppingList, ShoppingListItem
 from app.shopping.schemas import (
@@ -49,6 +50,7 @@ async def create_shopping_list(
     payload: ShoppingListGenerate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> ShoppingList:
     """生成清单: 物化缺口为 auto 条目(快照)。窗口来自计划或显式日期。"""
     start, end = payload.start_date, payload.end_date
@@ -64,7 +66,7 @@ async def create_shopping_list(
 
     sl = await generate_shopping_list(
         db, user.id, start, end,
-        source_meal_plan_id=payload.source_meal_plan_id, name=payload.name,
+        source_meal_plan_id=payload.source_meal_plan_id, name=payload.name, today=today,
     )
     await db.commit()
     # 重取(含条目): service 用 FK 插子行, sl.items 内存里未填充
@@ -90,18 +92,19 @@ async def inventory_preview(
     end_date: date | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> list[dict]:
     """库存预扣视图(I6): 实际 + 预计剩余(可负)。默认今天起 7 天窗口。
 
     ⚠️ 必须定义在 GET /{list_id} 之前, 否则 "preview" 会被当成 list_id 匹配。
     """
     if start_date is None:
-        start_date = date.today()
+        start_date = today
     if end_date is None:
         end_date = start_date + timedelta(days=6)
     if end_date < start_date:
         raise HTTPException(422, "end_date 不能早于 start_date")
-    return await compute_preview(db, user.id, start_date, end_date)
+    return await compute_preview(db, user.id, start_date, end_date, today=today)
 
 
 @router.get("/{list_id}", response_model=ShoppingListRead)
@@ -118,10 +121,11 @@ async def regenerate_shopping_list(
     list_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> ShoppingList:
     """重算 auto 条目: 删未购 auto + 按新缺口重插; 保留已购与 manual。"""
     sl = await _get_owned_list(db, list_id, user)
-    await regenerate_auto_items(db, sl)
+    await regenerate_auto_items(db, sl, today=today)
     await db.commit()
     return await _get_owned_list(db, sl.id, user, with_items=True)
 
@@ -172,6 +176,7 @@ async def purchase_item(
     payload: ShoppingItemPurchase,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> ShoppingListItem:
     """打勾购买 → 入库项回流建批次(I9)。"""
     item = await _get_owned_item(db, list_id, item_id, user)
@@ -187,6 +192,7 @@ async def purchase_item(
         purchased_unit=payload.purchased_unit,
         location=payload.location,
         expires_at=payload.expires_at,
+        today=today,
     )
     await db.commit()
     await db.refresh(item)

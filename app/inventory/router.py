@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.dates import get_today
 from app.inventory import services
 from app.inventory.reservations import compute_reservations
 from app.inventory.schemas import (
@@ -39,13 +40,13 @@ async def list_inventory(
     include_empty: bool = Query(False, description="是否包含已用到 0 的批次(A6 默认隐藏)"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> list[InventoryItemRead]:
     """列出我的库存(FEFO 序), 附带临期状态(I4, 查询时算)。
     A6: 用到 0 的批次保留在数据库(撤销完成 / 删餐退回原批次要用), 默认不返回。
     """
     items = await services.list_inventory_items(db, user.id, include_empty=include_empty)
     settings = get_settings()
-    today = date.today()
 
     # ORM 对象 → Read schema, 并填入算出来的 expiry_status(非存储字段)
     return [
@@ -64,11 +65,12 @@ async def list_inventory(
 async def list_reservations(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> dict:
     """库存预留视图(A4): 今天及以后所有未完成餐次对各批次的预留 + 每餐明细 + 缺口。
     读时模拟(手选优先, 其余 FEFO 且不用过期批次), 不落库。只读, 无副作用。
     """
-    return await compute_reservations(db, user.id)
+    return await compute_reservations(db, user.id, today=today)
 
 
 @router.patch("/{item_id}", response_model=InventoryItemRead)

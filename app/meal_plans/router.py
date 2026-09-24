@@ -18,6 +18,7 @@ from app.ai.services import (
 from app.auth.dependencies import get_current_user
 from app.core.cache import cache_get, cache_set, invalidate_summary, summary_key
 from app.core.database import get_db
+from app.core.dates import get_today
 from app.core.redis import get_redis
 from app.inventory import services as inventory_services
 from app.inventory.models import EntryBatchPick, InventoryItem
@@ -58,11 +59,12 @@ async def generate_meal_plan_endpoint(
     payload: MealPlanGenerateRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> dict:
     """AI 排布周计划 → 返回**草稿**(不落库)。用户预览确认后再调 /generate/commit。
     无可用菜谱 400; AI 失败 502。阶段A 仅支持 recipe_source='existing'。
     """
-    start = payload.start_date or date.today()
+    start = payload.start_date or today
     try:
         return await generate_meal_plan(
             db, user, start_date=start, days=payload.days,
@@ -216,12 +218,13 @@ async def create_plan(
 async def list_plans(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ) -> list[MealPlan]:
     # 保证用户永远有一个默认 plan(Quick Log): 没有就建, 幂等。
     # 前端删不了默认 plan(见 delete_plan 守卫), 但历史用户可能没有, 这里兜底。
-    await get_or_create_default_plan(db, user.id)
+    await get_or_create_default_plan(db, user.id, today=today)
     await db.commit()
     stmt = (
         select(MealPlan)
@@ -352,15 +355,16 @@ async def quick_log(
     payload: QuickLogCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
     redis: Redis = Depends(get_redis),
 ) -> MealPlanEntry:
     variant = await db.get(RecipeVariant, payload.recipe_variant_id)
     if variant is None:
         raise HTTPException(404, f"菜谱版本 id={payload.recipe_variant_id} 不存在")
 
-    d = payload.scheduled_date or date.today()
+    d = payload.scheduled_date or today
 
-    plan = await get_or_create_default_plan(db, user.id)
+    plan = await get_or_create_default_plan(db, user.id, today=today)
     expand_plan_range(plan, d)
 
     entry = MealPlanEntry(
@@ -503,6 +507,7 @@ async def complete_entry(
     entry_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
     redis: Redis = Depends(get_redis),
 ) -> EntryCompleteRead:
     """标记完成 + 按 FEFO 扣减库存(同事务)。
@@ -519,7 +524,7 @@ async def complete_entry(
     entry.is_completed = True
     entry.completed_at = datetime.now(UTC)
 
-    shortfalls = await inventory_services.deduct_for_entry(db, user.id, entry)
+    shortfalls = await inventory_services.deduct_for_entry(db, user.id, entry, today=today)
 
     await db.commit()
     await db.refresh(entry)
@@ -569,6 +574,7 @@ async def set_entry_picks(
     payload: EntryPicksUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> None:
     """A4: 设定某餐某食材用哪几批(按列表顺序取够, 不够的部分仍自动分配)。
     只能选「还没被其他餐次预留」的余量(本餐自己当前占的也算可选)。过期批次可手选。
@@ -598,7 +604,7 @@ async def set_entry_picks(
             )).scalars().all()
         }
         # 可选量 = 批次未预留 + 本餐当前从它取的(与前端显示同一口径)
-        res = await compute_reservations(db, user.id)
+        res = await compute_reservations(db, user.id, today=today)
         free = {b["batch_id"]: b["free"] for b in res["batches"]}
         own: dict[int, Decimal] = {}
         for e in res["entries"]:

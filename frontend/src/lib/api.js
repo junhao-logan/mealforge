@@ -8,6 +8,13 @@
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
+// 浏览器所在时区(如 America/New_York)。后端据此算「今天」(A4.2),
+// 否则服务器按 UTC, 纽约晚 8 点后就算成第二天了。取不到就不带, 后端退回 UTC。
+function browserTimeZone() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null } catch { return null }
+}
+const TIME_ZONE = browserTimeZone()
+
 // Clerk 的 getToken 在组件里通过 useAuth() 拿, 但 api.js 是普通模块。
 // 方案: 调用方把 getToken 传进来(见 useApi hook), 或用全局注册。
 // 这里用"传入 token"的简单做法: 每个请求带上当前 token。
@@ -22,6 +29,7 @@ async function request(method, path, { token, body, params } = {}) {
 
     const headers = { 'Content-Type': 'application/json' }
     if (token) headers['Authorization'] = `Bearer ${token}`
+    if (TIME_ZONE) headers['X-Timezone'] = TIME_ZONE
 
     const resp = await fetch(url, {
         method,

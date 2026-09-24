@@ -32,7 +32,9 @@ def line_demand(ri: RecipeIngredient, entry: MealPlanEntry) -> Decimal:
     return ri.quantity_grams * entry.servings
 
 
-async def get_or_create_default_plan(db: AsyncSession, user_id) -> MealPlan:
+async def get_or_create_default_plan(
+    db: AsyncSession, user_id, *, today: date | None = None,
+) -> MealPlan:
     """取用户的 default plan, 没有就建一个(quick-log 用)。
     default plan: plan_type='default', 首建时 start=end=今天, 后续动态撑大。
     """
@@ -44,7 +46,7 @@ async def get_or_create_default_plan(db: AsyncSession, user_id) -> MealPlan:
     )).scalar_one_or_none()
 
     if plan is None:
-        today = date.today()
+        today = today or date.today()
         plan = MealPlan(
             user_id=user_id, name="My Log", plan_type="default",
             start_date=today, end_date=today, is_template=False,

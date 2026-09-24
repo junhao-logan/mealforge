@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.inventory.models import InventoryItem
@@ -20,7 +20,7 @@ _CENT = Decimal("0.01")   # 需求量化精度, 对齐 needed_grams 的 Numeric(
 
 
 async def _demand_and_stock(
-    db: AsyncSession, user_id, start: date, end: date
+    db: AsyncSession, user_id, start: date, end: date, *, today: date | None = None,
 ) -> tuple[dict[int, Decimal], dict[int, Decimal]]:
     """窗口内未完成餐的食材需求 + 当前库存, 各按食材聚合(克)。
 
@@ -58,10 +58,16 @@ async def _demand_and_stock(
             for ri in ri_by_variant.get(entry.recipe_variant_id, ()):
                 demand[ri.ingredient_id] += line_demand(ri, entry)
 
-    # ── 当前库存按食材聚合(净值, 不需批次/FEFO) ──
+    # ── 当前可用库存按食材聚合(净值, 不需批次/FEFO) ──
+    # A4.1: 已过期批次不算「有」—— 与库存预留(I14)口径一致: 自动分配不用过期批次,
+    # 所以库存页提示缺的, 采购这边也会让买
+    today = today or date.today()
     stock_stmt = (
         select(InventoryItem.ingredient_id, func.sum(InventoryItem.quantity_grams))
-        .where(InventoryItem.user_id == user_id)
+        .where(
+            InventoryItem.user_id == user_id,
+            or_(InventoryItem.expires_at.is_(None), InventoryItem.expires_at >= today),
+        )
         .group_by(InventoryItem.ingredient_id)
     )
     stock: dict[int, Decimal] = {
@@ -71,13 +77,13 @@ async def _demand_and_stock(
 
 
 async def compute_shortfall(
-    db: AsyncSession, user_id, start: date, end: date
+    db: AsyncSession, user_id, start: date, end: date, *, today: date | None = None,
 ) -> list[dict]:
     """采购缺口(I7) = 窗口内未完成餐需求 − 当前库存, 仅留净缺口 > 0。
 
     返回 [{"ingredient_id", "shortfall_grams"}], 按 ingredient_id 升序。
     """
-    demand, stock = await _demand_and_stock(db, user_id, start, end)
+    demand, stock = await _demand_and_stock(db, user_id, start, end, today=today)
 
     shortfalls: list[dict] = []
     for ingredient_id, needed in demand.items():
@@ -94,7 +100,7 @@ async def compute_shortfall(
 
 
 async def compute_preview(
-    db: AsyncSession, user_id, start: date, end: date
+    db: AsyncSession, user_id, start: date, end: date, *, today: date | None = None,
 ) -> list[dict]:
     """库存预扣视图(I6): 每个有库存或有需求的食材, 实际 / 需求 / 预计剩余。
 
@@ -103,7 +109,7 @@ async def compute_preview(
     返回 [{"ingredient_id", "actual_grams", "demand_grams",
           "projected_remaining_grams"}], 按 ingredient_id 升序。
     """
-    demand, stock = await _demand_and_stock(db, user_id, start, end)
+    demand, stock = await _demand_and_stock(db, user_id, start, end, today=today)
 
     rows: list[dict] = []
     for ingredient_id in set(demand) | set(stock):
@@ -120,14 +126,16 @@ async def compute_preview(
     return rows
 
 
-async def _materialize_auto_items(db: AsyncSession, sl: ShoppingList) -> None:
+async def _materialize_auto_items(
+    db: AsyncSession, sl: ShoppingList, *, today: date | None = None,
+) -> None:
     """跑清单预测窗口的缺口, 把结果插成 source='auto' 条目。
     生成与重算共用。纯手动清单(无预测窗口)不产生 auto。调用方负责事务。
     """
     if sl.forecast_start is None or sl.forecast_end is None:
         return
     shortfalls = await compute_shortfall(
-        db, sl.user_id, sl.forecast_start, sl.forecast_end
+        db, sl.user_id, sl.forecast_start, sl.forecast_end, today=today
     )
     for s in shortfalls:
         db.add(ShoppingListItem(
@@ -147,6 +155,8 @@ async def generate_shopping_list(
     end: date,
     source_meal_plan_id: int | None = None,
     name: str | None = None,
+    *,
+    today: date | None = None,
 ) -> ShoppingList:
     """新建采购清单, 并按 [start, end] 缺口物化 auto 条目(方案 B: 生成即快照)。
 
@@ -162,11 +172,13 @@ async def generate_shopping_list(
     )
     db.add(sl)
     await db.flush()   # 拿 sl.id 供子条目 FK
-    await _materialize_auto_items(db, sl)
+    await _materialize_auto_items(db, sl, today=today)
     return sl
 
 
-async def regenerate_auto_items(db: AsyncSession, sl: ShoppingList) -> ShoppingList:
+async def regenerate_auto_items(
+    db: AsyncSession, sl: ShoppingList, *, today: date | None = None,
+) -> ShoppingList:
     """重算已有清单的 auto 条目:删未购 auto + 按新缺口重插。
 
     保留:已购 auto(冻结的历史事实)、全部 manual(用户所加)。
@@ -180,7 +192,7 @@ async def regenerate_auto_items(db: AsyncSession, sl: ShoppingList) -> ShoppingL
             ShoppingListItem.is_purchased.is_(False),
         )
     )
-    await _materialize_auto_items(db, sl)
+    await _materialize_auto_items(db, sl, today=today)
     return sl
 
 
@@ -211,6 +223,8 @@ async def mark_item_purchased(
     purchased_unit: str = "g",
     location: str | None = None,
     expires_at: date | None = None,
+    *,
+    today: date | None = None,
 ) -> ShoppingListItem:
     """打勾购买: 标记已购 + (若入库项)回流建库存批次(I9)。
 
@@ -236,7 +250,7 @@ async def mark_item_purchased(
                 ingredient_id=item.ingredient_id,
                 input_amount=purchased_amount,
                 input_unit=purchased_unit,
-                purchased_at=date.today(),
+                purchased_at=today or date.today(),
                 location=location,
                 expires_at=expires_at,
             ),

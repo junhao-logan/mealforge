@@ -17,6 +17,7 @@ dependencies = [
     "redis>=5.2",
     "pyjwt[crypto]>=2.13.0",
     "google-genai>=1.0",
+    "tzdata>=2024.1",
 ]
 
 [dependency-groups]
