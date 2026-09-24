@@ -1,36 +1,24 @@
 // src/pages/ShoppingPage.jsx —— 采购(清单管理 + 缺口预览带加入清单)
+// A8: 同一食材的自动 + 手动项合成一行; 缺口预览扣掉「已在清单」的在途量; 数量按食材规范单位显示。
 import { AlertTriangle, Check, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import { CheckoutDialog } from '@/components/shopping/CheckoutDialog'
+import { Card } from '@/components/ui/card'
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
-import { CheckoutDialog } from '@/components/shopping/CheckoutDialog'
-import { Card } from '@/components/ui/card'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
 import { toISO } from '@/lib/dateRange'
+import { fmtAmount } from '@/lib/inventoryView'
+import { groupListItems } from '@/lib/shoppingView'
+import { unitLabel } from '@/lib/units'
 
 export function ShoppingPage() {
     const { t } = useTranslation()
     const [tab, setTab] = useState('lists')   // 默认清单页
-    const [ingredients, setIngredients] = useState({})
-    const { call } = useApi()
-
-    // 食材名映射(两个 tab 共用)
-    useEffect(() => {
-        let alive = true
-        call(api.get, '/ingredients', { params: { limit: 100 } })
-            .then((ings) => {
-                if (!alive) return
-                const map = {}
-                for (const ing of ings || []) map[ing.id] = ing.name
-                setIngredients(map)
-            })
-            .catch(() => { })
-        return () => { alive = false }
-    }, [call])
 
     return (
         <div>
@@ -45,9 +33,7 @@ export function ShoppingPage() {
                 </TabButton>
             </div>
 
-            {tab === 'lists'
-                ? <ShoppingLists ingredients={ingredients} />
-                : <ShortfallPreview ingredients={ingredients} />}
+            {tab === 'lists' ? <ShoppingLists /> : <ShortfallPreview />}
         </div>
     )
 }
@@ -66,7 +52,7 @@ function TabButton({ active, onClick, children }) {
 }
 
 // ═══ 采购清单(第一页) ═══
-function ShoppingLists({ ingredients }) {
+function ShoppingLists() {
     const { t } = useTranslation()
     const { call } = useApi()
     const [lists, setLists] = useState([])
@@ -75,7 +61,7 @@ function ShoppingLists({ ingredients }) {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [generating, setGenerating] = useState(false)
-    // 勾选状态: itemId → {checked, amount}
+    // 勾选状态: 代表行 itemId → {checked, amount}
     const [checkout, setCheckout] = useState({})
     const [showCheckout, setShowCheckout] = useState(false)
 
@@ -106,7 +92,7 @@ function ShoppingLists({ ingredients }) {
     useEffect(() => { loadLists() }, [loadLists])
     useEffect(() => { loadDetail(activeId) }, [activeId, loadDetail])
 
-    // 生成清单(未来7天缺口)
+    // 生成清单(未来7天缺口, 已在其他清单里的不会重复加)
     async function generate() {
         try {
             setGenerating(true)
@@ -148,6 +134,8 @@ function ShoppingLists({ ingredients }) {
     if (loading) return <State text={t('common.loading')} />
     if (error) return <State text={t('common.errorPrefix', { msg: error })} />
 
+    const rows = detail ? groupListItems(detail.items) : []
+
     return (
         <div>
             {/* 清单选择 + 生成 */}
@@ -185,7 +173,7 @@ function ShoppingLists({ ingredients }) {
                             {t('shopping.rangeCount', {
                                 start: detail.forecast_start,
                                 end: detail.forecast_end,
-                                count: detail.items.length,
+                                count: rows.length,
                             })}
                         </div>
                         <div className="flex gap-2">
@@ -204,39 +192,38 @@ function ShoppingLists({ ingredients }) {
                         </div>
                     </div>
 
-                    {detail.items.length === 0 ? (
+                    {rows.length === 0 ? (
                         <State text={t('shopping.listEmpty')} />
                     ) : (
                         <>
                             <div className="space-y-2">
-                                {detail.items.map((item) => (
+                                {rows.map((row) => (
                                     <ShoppingItemRow
-                                        key={item.id}
-                                        item={item}
-                                        name={ingredients[item.ingredient_id] || item.item_name}
-                                        state={checkout[item.id]}
+                                        key={row.key}
+                                        row={row}
+                                        state={checkout[row.rep.id]}
                                         onToggle={(checked) => setCheckout((p) => ({
                                             ...p,
-                                            [item.id]: {
+                                            [row.rep.id]: {
                                                 checked,
-                                                amount: p[item.id]?.amount
-                                                    ?? (item.needed_grams ? Number(item.needed_grams).toFixed(0) : ''),
+                                                amount: p[row.rep.id]?.amount
+                                                    ?? (row.needed ? String(Number(row.needed.toFixed(2))) : ''),
                                             },
                                         }))}
                                         onAmount={(amount) => setCheckout((p) => ({
-                                            ...p, [item.id]: { checked: p[item.id]?.checked ?? true, amount },
+                                            ...p, [row.rep.id]: { checked: p[row.rep.id]?.checked ?? true, amount },
                                         }))}
                                     />
                                 ))}
                             </div>
 
                             {/* 结算按钮: 有勾选才显示 */}
-                            {selectedCount(detail, checkout) > 0 && (
+                            {selectedCount(rows, checkout) > 0 && (
                                 <button
                                     className="mt-4 w-full rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
                                     onClick={() => setShowCheckout(true)}
                                 >
-                                    {t('shopping.checkout', { count: selectedCount(detail, checkout) })}
+                                    {t('shopping.checkout', { count: selectedCount(rows, checkout) })}
                                 </button>
                             )}
                         </>
@@ -249,7 +236,7 @@ function ShoppingLists({ ingredients }) {
                 <CheckoutDialog
                     open={showCheckout}
                     listId={activeId}
-                    checkoutItems={buildCheckoutItems(detail, checkout, ingredients, t)}
+                    checkoutItems={buildCheckoutItems(rows, checkout, t)}
                     onClose={() => setShowCheckout(false)}
                     onDone={() => { setCheckout({}); loadDetail(activeId) }}
                 />
@@ -258,18 +245,21 @@ function ShoppingLists({ ingredients }) {
     )
 }
 
-// 清单一行: 勾选 + 输入实际购买量(已购的显示状态)
-function ShoppingItemRow({ item, name, state, onToggle, onAmount }) {
+// 清单一行(可能是合并的多条): 勾选 + 输入实际购买量; 已购的显示状态
+function ShoppingItemRow({ row, state, onToggle, onAmount }) {
     const { t } = useTranslation()
-    if (item.is_purchased) {
+    const name = row.name || t('mealPlans.unnamed')
+    const amt = (v) => fmtAmount(v, row.unit)
+
+    if (row.purchased) {
         return (
             <Card className="flex items-center justify-between border-green-200 bg-green-50 p-3">
                 <div className="flex items-center gap-3">
                     <Check className="h-5 w-5 text-green-600" />
-                    <span className="font-medium text-slate-900">{name || t('mealPlans.unnamed')}</span>
+                    <span className="font-medium text-slate-900">{name}</span>
                 </div>
                 <span className="text-sm text-green-600">
-                    {item.purchased_grams ? t('shopping.bought', { grams: Number(item.purchased_grams).toFixed(0) }) : ''}
+                    {row.purchasedAmt ? t('shopping.bought', { amount: amt(row.purchasedAmt) }) : ''}
                 </span>
             </Card>
         )
@@ -277,55 +267,62 @@ function ShoppingItemRow({ item, name, state, onToggle, onAmount }) {
     const checked = state?.checked || false
     return (
         <Card className="flex items-center justify-between gap-3 p-3">
-            <label className="flex flex-1 items-center gap-3">
+            <label className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1">
                 <input
                     type="checkbox"
                     className="h-5 w-5 rounded border-slate-300"
                     checked={checked}
                     onChange={(e) => onToggle(e.target.checked)}
                 />
-                <span className="font-medium text-slate-900">{name || t('mealPlans.unnamed')}</span>
-                {item.needed_grams && (
-                    <span className="text-sm text-slate-400">{t('shopping.need', { grams: Number(item.needed_grams).toFixed(0) })}</span>
+                <span className="font-medium text-slate-900">{name}</span>
+                {row.needed > 0 && (
+                    <span className="text-sm text-slate-400">{t('shopping.need', { amount: amt(row.needed) })}</span>
+                )}
+                {/* 自动 + 手动合并的行, 标出各自多少 */}
+                {row.merged && (
+                    <span className="text-xs text-slate-400">
+                        ({t('shopping.sourceAuto', { amount: amt(row.autoAmt) })} + {t('shopping.sourceManual', { amount: amt(row.manualAmt) })})
+                    </span>
                 )}
             </label>
             {/* 勾选后可填实际买入量 */}
             {checked && (
                 <div className="flex items-center gap-1">
                     <input
-                        type="number"
+                        type="number" min="0" step="any"
                         className="w-24 rounded-md border border-slate-300 px-2 py-1 text-sm"
                         placeholder={t('shopping.buyAmountPh')}
                         value={state?.amount ?? ''}
                         onChange={(e) => onAmount(e.target.value)}
                     />
-                    <span className="text-sm text-slate-400">g</span>
+                    <span className="text-sm text-slate-400">{unitLabel(row.unit)}</span>
                 </div>
             )}
         </Card>
     )
 }
 
-// 勾选且填了量的项数
-function selectedCount(detail, checkout) {
-    return detail.items.filter(
-        (it) => !it.is_purchased && checkout[it.id]?.checked && Number(checkout[it.id]?.amount) > 0,
+// 勾选且填了量的行数
+function selectedCount(rows, checkout) {
+    return rows.filter(
+        (r) => !r.purchased && checkout[r.rep.id]?.checked && Number(checkout[r.rep.id]?.amount) > 0,
     ).length
 }
 
-// 组织结算数据
-function buildCheckoutItems(detail, checkout, ingredients, t) {
-    return detail.items
-        .filter((it) => !it.is_purchased && checkout[it.id]?.checked && Number(checkout[it.id]?.amount) > 0)
-        .map((it) => ({
-            item: it,
-            name: ingredients[it.ingredient_id] || it.item_name || t('mealPlans.unnamed'),
-            amount: checkout[it.id].amount,
+// 组织结算数据: 每个显示行只提交代表行(后端会关掉同食材兄弟行)
+function buildCheckoutItems(rows, checkout, t) {
+    return rows
+        .filter((r) => !r.purchased && checkout[r.rep.id]?.checked && Number(checkout[r.rep.id]?.amount) > 0)
+        .map((r) => ({
+            item: r.rep,
+            name: r.name || t('mealPlans.unnamed'),
+            unit: r.unit,
+            amount: checkout[r.rep.id].amount,
         }))
 }
 
 // ═══ 缺口预览(第二页)带加入清单 ═══
-function ShortfallPreview({ ingredients }) {
+function ShortfallPreview() {
     const { t } = useTranslation()
     const { call } = useApi()
     const [items, setItems] = useState([])
@@ -357,6 +354,7 @@ function ShortfallPreview({ ingredients }) {
 
     const shortItems = items.filter((it) => Number(it.projected_remaining_grams) < 0)
     const okItems = items.filter((it) => Number(it.projected_remaining_grams) >= 0)
+    const nameOf = (it) => it.name || t('inventory.food', { id: it.ingredient_id })
 
     if (items.length === 0) {
         return <State text={t('shopping.noMeals')} />
@@ -369,30 +367,42 @@ function ShortfallPreview({ ingredients }) {
             {shortItems.length > 0 ? (
                 <div className="space-y-2">
                     {shortItems.map((it) => {
+                        const amt = (v) => fmtAmount(v, it.unit)
                         const short = -Number(it.projected_remaining_grams)
+                        const inList = Number(it.in_list_grams) || 0
+                        const toAdd = Number(it.to_add_grams) || 0
                         return (
                             <Card
                                 key={it.ingredient_id}
-                                className="flex items-center justify-between border-amber-200 bg-amber-50 p-4"
+                                className={`flex flex-wrap items-center justify-between gap-2 p-4 ${toAdd > 0
+                                    ? 'border-amber-200 bg-amber-50'
+                                    : 'border-slate-200 bg-slate-50'}`}
                             >
                                 <div className="flex items-center gap-2">
-                                    <AlertTriangle className="h-4 w-4 text-amber-500" />
-                                    <span className="font-medium text-slate-900">
-                                        {ingredients[it.ingredient_id] || t('inventory.food', { id: it.ingredient_id })}
-                                    </span>
+                                    {toAdd > 0
+                                        ? <AlertTriangle className="h-4 w-4 text-amber-500" />
+                                        : <Check className="h-4 w-4 text-slate-400" />}
+                                    <span className="font-medium text-slate-900">{nameOf(it)}</span>
                                 </div>
-                                <div className="flex items-center gap-3">
+                                <div className="flex flex-wrap items-center gap-3">
                                     <span className="text-sm text-slate-600">
-                                        {t('shopping.have', { grams: Number(it.actual_grams).toFixed(0) })} ·{' '}
-                                        {t('shopping.needAmt', { grams: Number(it.demand_grams).toFixed(0) })} ·{' '}
-                                        <span className="font-semibold text-amber-700">{t('shopping.shortAmt', { grams: short.toFixed(0) })}</span>
+                                        {t('shopping.have', { amount: amt(it.actual_grams) })} ·{' '}
+                                        {t('shopping.needAmt', { amount: amt(it.demand_grams) })} ·{' '}
+                                        <span className="font-semibold text-amber-700">{t('shopping.shortAmt', { amount: amt(short) })}</span>
+                                        {inList > 0 && <> · {t('shopping.inList', { amount: amt(inList) })}</>}
                                     </span>
-                                    <button
-                                        className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-white"
-                                        onClick={() => setAddTarget({ ...it, shortGrams: short })}
-                                    >
-                                        {t('shopping.addToList')}
-                                    </button>
+                                    {toAdd > 0 ? (
+                                        <button
+                                            className="rounded-md border border-slate-300 px-2.5 py-1 text-xs text-slate-700 hover:bg-white"
+                                            onClick={() => setAddTarget({ ...it, toAdd })}
+                                        >
+                                            {t('shopping.addToList')}
+                                        </button>
+                                    ) : (
+                                        <span className="rounded-md bg-slate-200 px-2.5 py-1 text-xs text-slate-600">
+                                            {t('shopping.alreadyListed')}
+                                        </span>
+                                    )}
                                 </div>
                             </Card>
                         )
@@ -410,8 +420,8 @@ function ShortfallPreview({ ingredients }) {
                     <div className="mt-2 space-y-1">
                         {okItems.map((it) => (
                             <div key={it.ingredient_id} className="flex justify-between px-1">
-                                <span>{ingredients[it.ingredient_id] || t('inventory.food', { id: it.ingredient_id })}</span>
-                                <span className="text-slate-400">{t('shopping.remaining', { grams: Number(it.projected_remaining_grams).toFixed(0) })}</span>
+                                <span>{nameOf(it)}</span>
+                                <span className="text-slate-400">{t('shopping.remaining', { amount: fmtAmount(it.projected_remaining_grams, it.unit) })}</span>
                             </div>
                         ))}
                     </div>
@@ -422,7 +432,7 @@ function ShortfallPreview({ ingredients }) {
             <AddToListDialog
                 target={addTarget}
                 lists={lists}
-                name={addTarget ? ingredients[addTarget.ingredient_id] : ''}
+                name={addTarget ? nameOf(addTarget) : ''}
                 onClose={() => setAddTarget(null)}
                 onAdded={reload}
             />
@@ -430,7 +440,7 @@ function ShortfallPreview({ ingredients }) {
     )
 }
 
-// 缺口项加入清单(可调量)
+// 缺口项加入清单(可调量, 默认 = 扣掉在途量后还差的); 清单里已有这个食材的手动项时后端会并进去
 function AddToListDialog({ target, lists, name, onClose, onAdded }) {
     const { t } = useTranslation()
     const { call } = useApi()
@@ -442,7 +452,7 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
     useEffect(() => {
         if (target) {
             setListId(String(lists[0]?.id || ''))
-            setAmount(String(target.shortGrams?.toFixed(0) || ''))   // 默认加缺口量
+            setAmount(String(Number((target.toAdd || 0).toFixed(2))))
             setError(null)
         }
     }, [target, lists])
@@ -497,9 +507,11 @@ function AddToListDialog({ target, lists, name, onClose, onAdded }) {
                                 </select>
                             </div>
                             <div>
-                                <label className="mb-1 block text-sm font-medium text-slate-700">{t('inventory.quantityGrams')}</label>
+                                <label className="mb-1 block text-sm font-medium text-slate-700">
+                                    {t('inventory.quantityUnit', { unit: unitLabel(target?.unit || 'g') })}
+                                </label>
                                 <input
-                                    type="number" autoFocus
+                                    type="number" min="0" step="any" autoFocus
                                     className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                                     value={amount}
                                     onChange={(e) => setAmount(e.target.value)}

@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { api } from '@/lib/api'
+import { fmtAmount } from '@/lib/inventoryView'
 
 // 储存区: value 存后端, labelKey 显示
 const ZONES = [
@@ -17,7 +18,7 @@ const ZONES = [
     { value: '', labelKey: 'inventory.zoneUnspecified' },
 ]
 
-// checkoutItems: [{ item, name, amount }] —— 勾选且填了量的
+// checkoutItems: [{ item, name, unit, amount }] —— 勾选且填了量的(每个显示行一个代表 item)
 export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone }) {
     const { t } = useTranslation()
     const { call } = useApi()
@@ -38,7 +39,7 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
             setSubmitting(true)
             setError(null)
             // 逐个 purchase(前端组织批量; 后端是逐项端点)
-            for (const { item, amount } of checkoutItems) {
+            for (const { item, unit, amount } of checkoutItems) {
                 const loc = locations[item.id] ?? 'fridge'   // 默认冷藏
                 await call(
                     api.patch,
@@ -46,7 +47,7 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
                     {
                         body: {
                             purchased_amount: Number(amount),
-                            purchased_unit: 'g',
+                            purchased_unit: unit || 'g',   // 食材规范单位(块 / 个 / g)
                             location: loc || null,   // 空字符串→null(未指定)
                             expires_at: expires[item.id] || null,
                         },
@@ -73,12 +74,12 @@ export function CheckoutDialog({ open, listId, checkoutItems, onClose, onDone })
                         {t('shopping.checkoutDesc')}
                     </p>
                     <div className="max-h-80 space-y-2 overflow-y-auto">
-                        {checkoutItems.map(({ item, name, amount }) => (
+                        {checkoutItems.map(({ item, name, unit, amount }) => (
                             <div key={item.id} className="rounded-lg border border-slate-200 p-3">
                                 <div className="flex items-center justify-between gap-3">
                                     <div className="min-w-0">
                                         <div className="truncate font-medium text-slate-900">{name}</div>
-                                        <div className="text-xs text-slate-400">{amount}g</div>
+                                        <div className="text-xs text-slate-400">{fmtAmount(amount, unit)}</div>
                                     </div>
                                     <select
                                         className="rounded-md border border-slate-300 px-2 py-1 text-sm"

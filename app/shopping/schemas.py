@@ -44,6 +44,9 @@ class ShoppingListItemRead(BaseModel):
     purchased_grams: Decimal | None
     category_override: str | None
     notes: str | None
+    # A8: 食材名与规范单位(纯文本项为 None / "g")
+    ingredient_name: str | None = None
+    unit: str = "g"
 
 
 class ShoppingListRead(BaseModel):
@@ -96,6 +99,10 @@ class ShoppingItemPurchase(BaseModel):
 class PreviewItem(BaseModel):
     """库存预扣视图一行(I6): 实际 / 需求 / 预计剩余(可负)。"""
     ingredient_id: int
+    name: str | None = None
+    unit: str = "g"                      # 规范单位
     actual_grams: Decimal
     demand_grams: Decimal
     projected_remaining_grams: Decimal   # 负 = 排的饭会缺这么多
+    in_list_grams: Decimal = Decimal("0")   # A8: 已在清单里等着买的量(在途量)
+    to_add_grams: Decimal = Decimal("0")    # A8: 扣掉在途量后还需要加的量

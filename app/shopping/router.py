@@ -22,14 +22,37 @@ from app.shopping.schemas import (
 )
 from app.shopping.services import (
     add_manual_item,
+    close_sibling_items,
     compute_preview,
     generate_shopping_list,
+    ingredient_briefs,
     mark_item_purchased,
     regenerate_auto_items,
 )
 from app.users.models import User
 
 router = APIRouter(prefix="/shopping-lists", tags=["shopping"])
+
+
+async def _read_items(db: AsyncSession, items) -> list[dict]:
+    """条目 → 响应 dict, 附带食材名与规范单位(A8, 一次查询)。"""
+    briefs = await ingredient_briefs(db, [it.ingredient_id for it in items])
+    out = []
+    for it in items:
+        d = ShoppingListItemRead.model_validate(it).model_dump()
+        info = briefs.get(it.ingredient_id, {})
+        d["ingredient_name"] = info.get("name")
+        d["unit"] = info.get("unit", "g")
+        out.append(d)
+    return out
+
+
+async def _read_list(db: AsyncSession, sl: ShoppingList) -> dict:
+    return {
+        **ShoppingListListItem.model_validate(sl).model_dump(),
+        "source_meal_plan_id": sl.source_meal_plan_id,
+        "items": await _read_items(db, sl.items),
+    }
 
 
 async def _get_owned_list(
@@ -51,7 +74,7 @@ async def create_shopping_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     today: date = Depends(get_today),
-) -> ShoppingList:
+) -> dict:
     """生成清单: 物化缺口为 auto 条目(快照)。窗口来自计划或显式日期。"""
     start, end = payload.start_date, payload.end_date
     if payload.source_meal_plan_id is not None:
@@ -70,7 +93,7 @@ async def create_shopping_list(
     )
     await db.commit()
     # 重取(含条目): service 用 FK 插子行, sl.items 内存里未填充
-    return await _get_owned_list(db, sl.id, user, with_items=True)
+    return await _read_list(db, await _get_owned_list(db, sl.id, user, with_items=True))
 
 
 @router.get("", response_model=list[ShoppingListListItem])
@@ -112,8 +135,8 @@ async def get_shopping_list(
     list_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ShoppingList:
-    return await _get_owned_list(db, list_id, user, with_items=True)
+) -> dict:
+    return await _read_list(db, await _get_owned_list(db, list_id, user, with_items=True))
 
 
 @router.post("/{list_id}/regenerate", response_model=ShoppingListRead)
@@ -122,12 +145,12 @@ async def regenerate_shopping_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     today: date = Depends(get_today),
-) -> ShoppingList:
+) -> dict:
     """重算 auto 条目: 删未购 auto + 按新缺口重插; 保留已购与 manual。"""
     sl = await _get_owned_list(db, list_id, user)
     await regenerate_auto_items(db, sl, today=today)
     await db.commit()
-    return await _get_owned_list(db, sl.id, user, with_items=True)
+    return await _read_list(db, await _get_owned_list(db, sl.id, user, with_items=True))
 
 
 @router.delete("/{list_id}", status_code=204)
@@ -158,13 +181,13 @@ async def add_item(
     payload: ShoppingItemCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> ShoppingListItem:
+) -> dict:
     """手动加一条采购项(食材项或纯文本项)。"""
     sl = await _get_owned_list(db, list_id, user)
-    item = await add_manual_item(db, sl, payload)
+    item = await add_manual_item(db, sl, payload)   # A8: 已有同食材未购 manual 行则并入
     await db.commit()
     await db.refresh(item)
-    return item
+    return (await _read_items(db, [item]))[0]
 
 
 @router.patch(
@@ -177,7 +200,7 @@ async def purchase_item(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     today: date = Depends(get_today),
-) -> ShoppingListItem:
+) -> dict:
     """打勾购买 → 入库项回流建批次(I9)。"""
     item = await _get_owned_item(db, list_id, item_id, user)
     if item.is_purchased:
@@ -194,6 +217,8 @@ async def purchase_item(
         expires_at=payload.expires_at,
         today=today,
     )
+    # A8: 同食材的其他未购行在界面上已合成一行, 一起标记已购(不重复入库)
+    await close_sibling_items(db, item)
     await db.commit()
     await db.refresh(item)
-    return item
+    return (await _read_items(db, [item]))[0]
