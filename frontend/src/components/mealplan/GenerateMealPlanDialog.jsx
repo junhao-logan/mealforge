@@ -30,6 +30,7 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
     const [startDate, setStartDate] = useState(defaultStart || '')
     const [freeText, setFreeText] = useState('')
     const [ingredientSource, setIngredientSource] = useState('any')   // 'any' | 'inventory'
+    const [recipeSource, setRecipeSource] = useState('existing')      // 'existing' | 'new'
     const [targetPlanId, setTargetPlanId] = useState(activePlanId != null ? String(activePlanId) : '')
 
     function toggleMeal(m) {
@@ -39,6 +40,7 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
     function reset() {
         setDays(7); setMeals(['lunch', 'dinner'])
         setStartDate(defaultStart || ''); setFreeText(''); setIngredientSource('any')
+        setRecipeSource('existing')
         setTargetPlanId(activePlanId != null ? String(activePlanId) : ''); setError(null)
     }
 
@@ -49,6 +51,7 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
             const body = {
                 days: Number(days), meals,
                 ingredient_source: ingredientSource,
+                recipe_source: recipeSource,
                 language: (i18n.language || 'en').startsWith('zh') ? 'zh' : 'en',
             }
             if (startDate) body.start_date = startDate
@@ -130,6 +133,19 @@ export function GenerateMealPlanDialog({ defaultStart, plans = [], activePlanId 
                                     {t(m.labelKey)}
                                 </button>
                             ))}
+                        </div>
+                    </div>
+
+                    {/* 菜谱来源 */}
+                    <div>
+                        <label className="mb-1 block text-sm font-medium text-slate-700">{t('mealPlans.recipeSource')}</label>
+                        <div className="flex gap-2">
+                            <SrcBtn active={recipeSource === 'existing'} onClick={() => setRecipeSource('existing')}>
+                                {t('mealPlans.srcExisting')}
+                            </SrcBtn>
+                            <SrcBtn active={recipeSource === 'new'} onClick={() => setRecipeSource('new')}>
+                                {t('mealPlans.srcNew')}
+                            </SrcBtn>
                         </div>
                     </div>
 

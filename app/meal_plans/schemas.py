@@ -121,14 +121,33 @@ class EntryCompleteRead(BaseModel):
 
 # ---------- AI 周计划: 草稿(生成) + 提交(确认) ----------
 
+class NewRecipeIngredient(BaseModel):
+    """现编菜谱的一条配料: 引用已有食材(ingredient_id) 或 新建(new_name)。"""
+    ingredient_id: int | None = None
+    new_name: str | None = None
+    amount: Decimal = Field(gt=0)              # 已有食材用其单位; 新食材用克
+    per100g: dict | None = None               # 仅新食材: AI 估每 100g 营养
+
+
+class NewRecipeDraft(BaseModel):
+    """AI 现编的新菜谱(确认后才入库)。"""
+    name: str
+    instructions: str
+    cuisine: str | None = None
+    servings: Decimal | None = None
+    ingredients: list[NewRecipeIngredient] = Field(min_length=1)
+
+
 class MealPlanDraftEntry(BaseModel):
-    """草稿里的一条餐次(阶段A: 只引用已有 variant)。带菜名供前端预览。"""
+    """草稿里的一条餐次: 已有 → recipe_variant_id; 现编 → is_new + new_recipe。"""
     day_offset: int
     meal_type: str
-    recipe_variant_id: int
     servings: Decimal = Decimal("1")
     recipe_name: str
+    is_new: bool = False
+    recipe_variant_id: int | None = None
     variant_name: str | None = None
+    new_recipe: NewRecipeDraft | None = None
 
 
 class MealPlanDraft(BaseModel):
@@ -140,11 +159,12 @@ class MealPlanDraft(BaseModel):
 
 
 class MealPlanCommitEntry(BaseModel):
-    """确认时提交的一条餐次(用户可能已在预览里增删改)。"""
+    """确认时提交的一条餐次: 用已有 variant 或现编 new_recipe(确认时才落库)。"""
     day_offset: int = Field(ge=0)
     meal_type: str
-    recipe_variant_id: int
     servings: Decimal = Field(default=Decimal("1"), gt=0)
+    recipe_variant_id: int | None = None
+    new_recipe: NewRecipeDraft | None = None
 
 
 class MealPlanCommitRequest(BaseModel):

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,7 +20,7 @@ from app.core.config import get_settings
 from app.ingredients.models import Ingredient
 from app.inventory.models import InventoryItem
 from app.recipes.models import Recipe, RecipeIngredient, RecipeVariant
-from app.recipes.services import compute_variant_nutrition
+from app.recipes.services import compute_variant_nutrition, resolve_quantity
 
 
 class EmptyInventoryError(Exception):
@@ -126,6 +126,80 @@ async def _persist_success(
     return loaded
 
 
+def _num(v):
+    return None if v is None else Decimal(str(v))
+
+
+async def _dedupe_or_create_ingredient(db, user, name: str, per100g: dict | None) -> Ingredient:
+    """新食材: 先按规范化名去重(全局或本人私有)。命中 → 复用(用库里准确营养);
+    没有 → 新建(克本位 + AI 估算营养, source=ai_generated, private)。不 commit。"""
+    norm = " ".join(name.lower().split())
+    ing = (await db.execute(
+        select(Ingredient).where(
+            Ingredient.name_normalized == norm,
+            or_(Ingredient.visibility == "global",
+                Ingredient.created_by_user_id == user.id),
+        ).limit(1)
+    )).scalar_one_or_none()
+    if ing is not None:
+        return ing                         # 命中: 用库里的准确营养, 不用 AI 估
+
+    p = per100g or {}
+    ing = Ingredient(
+        name=name.strip(), name_normalized=norm,
+        source="ai_generated", visibility="private", created_by_user_id=user.id,
+        default_unit="g", grams_per_unit=Decimal("1"),
+        nutrition_basis_unit="g", nutrition_basis_amount=Decimal("100"),
+        per_100g_calories=_num(p.get("calories")),
+        per_100g_protein=_num(p.get("protein")),
+        per_100g_carbs=_num(p.get("carbs")),
+        per_100g_fat=_num(p.get("fat")),
+    )
+    db.add(ing)
+    await db.flush()
+    return ing
+
+
+async def persist_new_recipe(db, user, nr: dict) -> int:
+    """把一份 AI 现编菜谱落库(用户确认时) → 返回新 recipe_variant_id。
+    配料: ingredient_id 直接用; new_name 按名去重(命中复用, 否则新建)。不 commit。"""
+    resolved = []
+    for ln in nr["ingredients"]:
+        iid = ln.get("ingredient_id")
+        if iid is not None:
+            ing = await db.get(Ingredient, iid)
+            if ing is None:
+                raise RecipeValidationError(f"配料引用了不存在的食材 id: {iid}")
+        else:
+            ing = await _dedupe_or_create_ingredient(
+                db, user, ln["new_name"], ln.get("per100g"))
+        amount = Decimal(str(ln["amount"]))
+        unit = ing.nutrition_basis_unit or "g"
+        resolved.append((ing, amount, unit))
+
+    recipe = Recipe(
+        name=nr["name"], cuisine=nr.get("cuisine"),
+        source="ai_generated", visibility="private", created_by_user_id=user.id,
+    )
+    variant = RecipeVariant(
+        name="AI", instructions=nr["instructions"],
+        servings=int(nr.get("servings") or 1),
+    )
+    for ing, amount, unit in resolved:
+        qty = resolve_quantity(ing, amount, unit)
+        ri = RecipeIngredient(
+            ingredient_id=ing.id, quantity_grams=qty,
+            input_amount=amount, input_unit=unit,
+        )
+        ri.ingredient = ing               # 供营养聚合读 per-基准 营养
+        variant.ingredients.append(ri)
+    compute_variant_nutrition(variant)
+    variant.recipe = recipe
+    db.add(recipe)
+    await db.flush()
+    return variant.id
+
+
 async def _persist_failure_log(
     db: AsyncSession, user, prompt: str, model: str, error: str, raw: dict | None,
     kind: str = "recipe",
@@ -218,25 +292,67 @@ async def _inventory_ingredient_ids(db: AsyncSession, user_id) -> set[int]:
 
 
 def _validate_plan(tool_input: dict, catalog_ids: set[int], days: int,
-                   meals: set[str]) -> list[dict]:
-    """防幻觉硬校验: variant_id 在清单内、day_offset/meal_type 合法。"""
+                   meals: set[str], *, palette_ids: set[int] | None = None,
+                   allow_new: bool = False) -> list[dict]:
+    """防幻觉硬校验: 每条 entry 用已有 variant_id 或(allow_new 时)新编 new_recipe;
+    day_offset/meal_type 合法; new_recipe 配料要么引用 palette 里的 id, 要么给 new_name。"""
+    palette_ids = palette_ids or set()
     entries = tool_input.get("entries") or []
     if not entries:
         raise RecipeValidationError("AI 未返回任何餐次", raw=tool_input)
     for e in entries:
-        if e["recipe_variant_id"] not in catalog_ids:
-            raise RecipeValidationError(
-                f"AI 引用了清单外的做法 id: {e['recipe_variant_id']}", raw=tool_input
-            )
         if not (0 <= e["day_offset"] < days):
-            raise RecipeValidationError(
-                f"day_offset 越界: {e['day_offset']}", raw=tool_input
-            )
+            raise RecipeValidationError(f"day_offset 越界: {e['day_offset']}", raw=tool_input)
         if e["meal_type"] not in meals:
+            raise RecipeValidationError(f"非法餐段: {e['meal_type']}", raw=tool_input)
+
+        nr = e.get("new_recipe")
+        if nr is not None:
+            if not allow_new:
+                raise RecipeValidationError("当前不允许现编新菜谱", raw=tool_input)
+            if not nr.get("name") or not nr.get("instructions"):
+                raise RecipeValidationError("new_recipe 缺 name/instructions", raw=tool_input)
+            lines = nr.get("ingredients") or []
+            if not lines:
+                raise RecipeValidationError("new_recipe 无配料", raw=tool_input)
+            for ln in lines:
+                iid = ln.get("ingredient_id")
+                if iid is not None and iid not in palette_ids:
+                    raise RecipeValidationError(
+                        f"new_recipe 引用了清单外的食材 id: {iid}", raw=tool_input
+                    )
+                if iid is None and not ln.get("new_name"):
+                    raise RecipeValidationError(
+                        "配料无 ingredient_id 也无 new_name", raw=tool_input)
+                if not ln.get("amount") or float(ln["amount"]) <= 0:
+                    raise RecipeValidationError("amount 必须 > 0", raw=tool_input)
+            continue
+
+        vid = e.get("recipe_variant_id")
+        if vid is None:
             raise RecipeValidationError(
-                f"非法餐段: {e['meal_type']}", raw=tool_input
-            )
+                "entry 无 recipe_variant_id 也无 new_recipe", raw=tool_input)
+        if vid not in catalog_ids:
+            raise RecipeValidationError(
+                f"引用了清单外的做法 id: {vid}", raw=tool_input)
     return entries
+
+
+async def _ingredient_palette(db: AsyncSession, user_id, *, only_ids=None) -> list[dict]:
+    """现编新菜谱的 grounding: 用户可见食材(全局或本人私有)的 id + 名字 + 规范单位。
+    only_ids 给定时只取这些(用于"只用库存"—— 限定在库存食材里现编)。上限 80 条。"""
+    from sqlalchemy import or_ as _or
+    stmt = (
+        select(Ingredient.id, Ingredient.name, Ingredient.nutrition_basis_unit)
+        .where(_or(Ingredient.visibility == "global",
+                   Ingredient.created_by_user_id == user_id))
+    )
+    if only_ids is not None:
+        if not only_ids:
+            return []
+        stmt = stmt.where(Ingredient.id.in_(only_ids))
+    rows = (await db.execute(stmt.limit(80))).all()
+    return [{"id": r[0], "name": r[1], "unit": r[2] or "g"} for r in rows]
 
 
 async def _log_plan_success(db, user, result, prompt, model) -> None:
@@ -258,45 +374,57 @@ async def generate_meal_plan(
     meals: list[str] | None = None,
     free_text: str | None = None,
     ingredient_source: str = "any",
+    recipe_source: str = "existing",
     language: str | None = None,
 ):
-    """AI 从已有可见菜谱排布 N 天计划 → 返回**草稿**(不落库)。
+    """AI 排 N 天计划 → 返回**草稿**(不落库)。
 
-    · ingredient_source='inventory': 只从"库存能做"的菜谱里排, 不够就少排不硬凑
-    · ingredient_source='any': 从全部可见菜谱排(缺料后续在采购页补齐)
-    · 只出草稿, 用户预览确认后经 commit 端点追加进计划(阶段A)
-    · 阶段B 再叠加 recipe_source='new'(AI 现编新菜谱)
-    返回: {"start_date","days","meals","entries":[{...,recipe_name,variant_name}]}
+    · recipe_source='existing': 只用已有菜谱(阶段A)
+    · recipe_source='new': 可混用已有 + 现编新菜谱/新食材(阶段B), 确认后才入库
+    · ingredient_source='inventory': 只用库存(已有做法只留库存能做的; 现编只用库存食材), 不硬凑
+    · ingredient_source='any': 不限(缺料后续采购补齐)
+    返回草稿, entries 每条: 已有 → recipe_variant_id; 现编 → is_new + new_recipe。
     """
     from app.ai.prompts import build_meal_plan_message
 
     meals = meals or ["lunch", "dinner"]
-    catalog = await _variant_catalog(db, user.id)
-    if not catalog:
-        raise EmptyRecipeCatalogError("没有可用菜谱, 无法生成周计划")
-
+    allow_new = recipe_source == "new"
     inventory_only = ingredient_source == "inventory"
+    stock = await _inventory_ingredient_ids(db, user.id) if inventory_only else None
+
+    catalog = await _variant_catalog(db, user.id)
     if inventory_only:
-        # 只保留"所有配料都在库存"的做法(库存能做)
-        stock = await _inventory_ingredient_ids(db, user.id)
         catalog = [
             c for c in catalog
             if c["ingredient_ids"] and set(c["ingredient_ids"]) <= stock
         ]
-        if not catalog:
-            raise EmptyRecipeCatalogError("库存现在做不出任何已有菜谱, 先加点库存或改用'允许采购'")
+
+    # 现编需要食材调色板(库存模式限定库存食材)
+    palette = await _ingredient_palette(db, user.id, only_ids=stock) if allow_new else []
+    palette_ids = {p["id"] for p in palette}
+
+    # 无已有做法 且 不允许现编(或现编但也没食材) → 无从生成
+    if not catalog and not (allow_new and palette):
+        raise EmptyRecipeCatalogError(
+            "没有可用菜谱; 换'允许 AI 新编'或先加点菜谱/库存" if not allow_new
+            else "库存里没有可用食材, 先加点库存或改用'允许采购'"
+        )
 
     by_id = {c["variant_id"]: c for c in catalog}
     catalog_ids = set(by_id)
     prompt = build_meal_plan_message(
         catalog, days=days, meals=meals, free_text=free_text,
         inventory_only=inventory_only, language=language,
+        allow_new=allow_new, ingredients=palette,
     )
     model = get_settings().gemini_model
 
     try:
         result = await generate_meal_plan_raw(prompt)
-        entries = _validate_plan(result.tool_input, catalog_ids, days, set(meals))
+        entries = _validate_plan(
+            result.tool_input, catalog_ids, days, set(meals),
+            palette_ids=palette_ids, allow_new=allow_new,
+        )
         await _log_plan_success(db, user, result, prompt, model)
     except (AiError, RecipeValidationError) as e:
         raw = getattr(e, "raw", None)
@@ -305,18 +433,31 @@ async def generate_meal_plan(
         )
         raise
 
-    # 用 catalog 补菜名, 组装草稿(不落库)
+    # 组装草稿(不落库)
     draft_entries = []
     for e in entries:
-        c = by_id.get(e["recipe_variant_id"], {})
-        draft_entries.append({
+        base = {
             "day_offset": e["day_offset"],
             "meal_type": e["meal_type"],
-            "recipe_variant_id": e["recipe_variant_id"],
             "servings": Decimal(str(e.get("servings") or 1)),
-            "recipe_name": c.get("recipe_name", ""),
-            "variant_name": c.get("variant_name"),
-        })
+        }
+        nr = e.get("new_recipe")
+        if nr is not None:
+            base.update({
+                "is_new": True,
+                "recipe_name": nr.get("name", ""),
+                "new_recipe": nr,
+            })
+        else:
+            c = by_id.get(e["recipe_variant_id"], {})
+            base.update({
+                "is_new": False,
+                "recipe_variant_id": e["recipe_variant_id"],
+                "recipe_name": c.get("recipe_name", ""),
+                "variant_name": c.get("variant_name"),
+            })
+        draft_entries.append(base)
+
     return {
         "start_date": start_date,
         "days": days,

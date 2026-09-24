@@ -73,27 +73,47 @@ def build_variant_catalog(variants: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def build_ingredient_palette(ingredients: list[dict]) -> str:
+    """可用食材清单(现编新菜谱 grounding): 每项 ingredient_id + 名字 + 单位。"""
+    lines = []
+    for i in ingredients:
+        lines.append(f"- ingredient_id={i['id']}: {i['name']}（单位: {i['unit']}）")
+    return "\n".join(lines)
+
+
 def build_meal_plan_message(
     variants: list[dict], *, days: int, meals: list[str],
     free_text: str | None = None,
     inventory_only: bool = False,
     language: str | None = None,
+    allow_new: bool = False,
+    ingredients: list[dict] | None = None,
 ) -> str:
     """拼周计划 prompt: 可用做法(grounding) + 天数 + 餐段 + 一句自由文本。"""
     parts = [
-        "【可用做法】(只能用这些, 用 variant_id 引用):",
-        build_variant_catalog(variants),
+        "【可用做法】(可用这些的 variant_id 引用):",
+        build_variant_catalog(variants) or "(暂无已有做法)",
         f"\n【要求】: 天数 {days}（day_offset 0..{days - 1}）; "
         f"每天餐段: {', '.join(meals)}",
     ]
+    if allow_new:
+        # 阶段B: 允许现编新菜谱
+        parts.append(
+            "\n【现编新菜谱】: 可以给某些餐现编 new_recipe(与 recipe_variant_id 二选一)。"
+            "配料优先用下面【可用食材】里的 ingredient_id(数量用该食材单位, 可小数如 0.8); "
+            "只有清单里确实没有的食材才用 new_name 新建, 并给 per100g 营养估算。"
+        )
+        if ingredients:
+            parts.append("\n【可用食材】(优先用其 ingredient_id):\n"
+                         + build_ingredient_palette(ingredients))
     if inventory_only:
         # "只用库存"模式: 上面清单已过滤为库存能做的; 不够就少排, 别硬凑重复
         parts.append(
-            "\n【库存约束】: 以上做法都是库存能做的。合理搭配、避免同一道菜过度重复; "
-            "如果做法不足以填满所有餐段, 就少排几餐、留空即可, 不要硬凑。"
+            "\n【库存约束】: 优先用库存能做的。合理搭配、避免同一道菜过度重复; "
+            "如果不足以填满所有餐段, 就少排几餐、留空即可, 不要硬凑。"
         )
     if language:
-        parts.append(f"\n【语言】: 计划相关的文字用 {language}。")
+        parts.append(f"\n【语言】: 菜谱名、做法、新食材名等所有生成文字都用 {language}。")
     if free_text:
         parts.append(f"\n【补充说明】: {free_text}")
     parts.append("\n请调用 save_meal_plan 工具生成计划。")

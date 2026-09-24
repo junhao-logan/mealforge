@@ -95,12 +95,16 @@ export function MealPlansPage() {
             setCommitting(true)
             const body = {
                 start_date: draft.start_date,
-                entries: draft.entries.map((e) => ({
-                    day_offset: e.day_offset,
-                    meal_type: e.meal_type,
-                    recipe_variant_id: e.recipe_variant_id,
-                    servings: Number(e.servings) || 1,
-                })),
+                entries: draft.entries.map((e) => {
+                    const base = {
+                        day_offset: e.day_offset,
+                        meal_type: e.meal_type,
+                        servings: Number(e.servings) || 1,
+                    }
+                    return e.is_new
+                        ? { ...base, new_recipe: e.new_recipe }        // 现编 → 确认时才落库
+                        : { ...base, recipe_variant_id: e.recipe_variant_id }
+                }),
             }
             if (draft.targetPlanId) body.target_plan_id = Number(draft.targetPlanId)
             await call(api.post, '/meal-plans/generate/commit', { body })
@@ -315,6 +319,11 @@ function DraftEntryCard({ entry, onDelete }) {
                         {' · '}{t('mealPlans.draftBadge')}
                     </span>
                     <div className="truncate font-medium text-slate-900">
+                        {entry.is_new && (
+                            <span className="mr-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-700">
+                                {t('mealPlans.newRecipeBadge')}
+                            </span>
+                        )}
                         {entry.recipe_name}
                         {Number(entry.servings) !== 1 && (
                             <span className="ml-1 text-xs text-slate-400">×{Number(entry.servings)}</span>

@@ -13,6 +13,7 @@ from app.ai.services import (
     EmptyRecipeCatalogError,
     RecipeValidationError,
     generate_meal_plan,
+    persist_new_recipe,
 )
 from app.auth.dependencies import get_current_user
 from app.core.cache import cache_get, cache_set, invalidate_summary, summary_key
@@ -56,14 +57,13 @@ async def generate_meal_plan_endpoint(
     """AI 排布周计划 → 返回**草稿**(不落库)。用户预览确认后再调 /generate/commit。
     无可用菜谱 400; AI 失败 502。阶段A 仅支持 recipe_source='existing'。
     """
-    if payload.recipe_source == "new":
-        raise HTTPException(400, "AI 现编新菜谱(阶段B)暂未实现, 请用'只用已有菜谱'")
     start = payload.start_date or date.today()
     try:
         return await generate_meal_plan(
             db, user, start_date=start, days=payload.days,
             meals=payload.meals, free_text=payload.free_text,
-            ingredient_source=payload.ingredient_source, language=payload.language,
+            ingredient_source=payload.ingredient_source,
+            recipe_source=payload.recipe_source, language=payload.language,
         )
     except EmptyRecipeCatalogError as e:
         raise HTTPException(400, str(e)) from e
@@ -96,33 +96,43 @@ async def commit_meal_plan_draft(
         db.add(plan)
         await db.flush()
 
-    # 2) 校验所有引用的 variant 对用户可见(global 或本人私有)
-    variant_ids = {e.recipe_variant_id for e in payload.entries}
-    visible = set((await db.execute(
-        select(RecipeVariant.id)
-        .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
-        .where(
-            RecipeVariant.id.in_(variant_ids),
-            or_(Recipe.visibility == "global", Recipe.created_by_user_id == user.id),
-        )
-    )).scalars().all())
-    missing = variant_ids - visible
-    if missing:
-        raise HTTPException(400, f"引用了不可见的菜谱做法: {sorted(missing)}")
+    # 2) 校验已有做法的 variant 对用户可见(global 或本人私有)
+    existing_ids = {e.recipe_variant_id for e in payload.entries if e.new_recipe is None}
+    if existing_ids:
+        visible = set((await db.execute(
+            select(RecipeVariant.id)
+            .join(Recipe, Recipe.id == RecipeVariant.recipe_id)
+            .where(
+                RecipeVariant.id.in_(existing_ids),
+                or_(Recipe.visibility == "global", Recipe.created_by_user_id == user.id),
+            )
+        )).scalars().all())
+        missing = existing_ids - visible
+        if missing:
+            raise HTTPException(400, f"引用了不可见的菜谱做法: {sorted(missing)}")
 
-    # 3) 逐条追加 entry, 按需撑大计划日期范围
+    # 3) 逐条追加 entry; new_recipe → 现在才落库(去重食材 + 建菜谱), 按需撑大日期范围
     affected: set[date] = set()
-    for e in payload.entries:
-        sched = start + timedelta(days=e.day_offset)
-        expand_plan_range(plan, sched)
-        db.add(MealPlanEntry(
-            meal_plan_id=plan.id,
-            scheduled_date=sched,
-            meal_type=e.meal_type,
-            recipe_variant_id=e.recipe_variant_id,
-            servings=e.servings,
-        ))
-        affected.add(sched)
+    try:
+        for e in payload.entries:
+            if e.new_recipe is not None:
+                variant_id = await persist_new_recipe(db, user, e.new_recipe.model_dump())
+            elif e.recipe_variant_id is not None:
+                variant_id = e.recipe_variant_id
+            else:
+                raise HTTPException(400, "每条 entry 需给 recipe_variant_id 或 new_recipe")
+            sched = start + timedelta(days=e.day_offset)
+            expand_plan_range(plan, sched)
+            db.add(MealPlanEntry(
+                meal_plan_id=plan.id,
+                scheduled_date=sched,
+                meal_type=e.meal_type,
+                recipe_variant_id=variant_id,
+                servings=e.servings,
+            ))
+            affected.add(sched)
+    except RecipeValidationError as ex:
+        raise HTTPException(400, str(ex)) from ex
 
     await db.commit()
 

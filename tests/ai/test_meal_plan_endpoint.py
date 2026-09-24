@@ -100,3 +100,81 @@ async def test_generate_plan_endpoint_ai_fail_502(api_client, monkeypatch):
 
     resp = await client.post("/meal-plans/generate", json={})
     assert resp.status_code == 502
+
+# ---------- 阶段B: recipe_source='new' (AI 现编新菜谱/新食材) ----------
+
+async def test_generate_new_recipe_returns_draft(api_client, monkeypatch):
+    """recipe_source='new': AI 现编 → 草稿里 is_new + new_recipe。"""
+    client, db, user = api_client
+    await make_ingredient(db, "tomato", visibility="global")   # 调色板非空
+
+    async def fake_raw(prompt):
+        return AiResult(tool_input={"entries": [{
+            "day_offset": 0, "meal_type": "lunch", "servings": 1,
+            "new_recipe": {
+                "name": "Egg scramble", "instructions": "cook",
+                "ingredients": [{
+                    "new_name": "egg", "amount": 100,
+                    "per100g": {"calories": 150, "protein": 13, "carbs": 1, "fat": 10},
+                }],
+            },
+        }]}, input_tokens=1, output_tokens=1)
+    monkeypatch.setattr(svc, "generate_meal_plan_raw", fake_raw)
+
+    resp = await client.post("/meal-plans/generate", json={"days": 1, "recipe_source": "new"})
+    assert resp.status_code == 200, resp.text
+    e = resp.json()["entries"][0]
+    assert e["is_new"] is True
+    assert e["new_recipe"]["name"] == "Egg scramble"
+
+
+async def test_commit_new_recipe_creates_ingredient_and_recipe(api_client):
+    """确认现编草稿 → 建新食材 + 新菜谱 + entry。"""
+    from sqlalchemy import func, select
+
+    from app.ingredients.models import Ingredient
+
+    client, db, user = api_client
+    resp = await client.post("/meal-plans/generate/commit", json={
+        "start_date": "2026-08-10",
+        "entries": [{
+            "day_offset": 0, "meal_type": "lunch", "servings": 1,
+            "new_recipe": {
+                "name": "Egg scramble", "instructions": "cook",
+                "ingredients": [{
+                    "new_name": "egg", "amount": 100,
+                    "per100g": {"calories": 150, "protein": 13, "carbs": 1, "fat": 10},
+                }],
+            },
+        }],
+    })
+    assert resp.status_code == 201, resp.text
+    assert len(resp.json()["entries"]) == 1
+    n = (await db.execute(select(func.count()).select_from(Ingredient)
+                          .where(Ingredient.name_normalized == "egg"))).scalar()
+    assert n == 1                       # 新食材建了
+
+
+async def test_commit_new_recipe_dedupes_ingredient(api_client):
+    """现编用的新食材名命中已有 → 复用, 不重复建。"""
+    from sqlalchemy import func, select
+
+    from app.ingredients.models import Ingredient
+
+    client, db, user = api_client
+    await make_ingredient(db, "egg", visibility="global")     # 已有
+
+    resp = await client.post("/meal-plans/generate/commit", json={
+        "start_date": "2026-08-10",
+        "entries": [{
+            "day_offset": 0, "meal_type": "lunch", "servings": 1,
+            "new_recipe": {
+                "name": "Egg scramble", "instructions": "cook",
+                "ingredients": [{"new_name": "egg", "amount": 100}],
+            },
+        }],
+    })
+    assert resp.status_code == 201, resp.text
+    n = (await db.execute(select(func.count()).select_from(Ingredient)
+                          .where(Ingredient.name_normalized == "egg"))).scalar()
+    assert n == 1                       # 没建重复的 egg
