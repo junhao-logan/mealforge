@@ -304,6 +304,15 @@
 - **判断**：第 1 层依赖公开菜谱功能；第 2/3 层属平台成熟期（审核治理 + AI 去重）。
   单人开发 MVP 只做私有创建 + 过滤，预留 `visibility` 值域与演进路径。
 
+**补充（2026-09-24，第 1 批代码审查）：写入口统一校验可见性**
+
+- **发现**：列表 / 详情都按 I11 过滤了，但多个**写入口**只查「存在」不查「可见」——
+  建菜谱 / 入库 / 加采购项能引用别人的私有食材，手动排餐 / quick-log 能排别人的私有菜谱；
+  随后对方私有食材名、菜名会出现在自己的库存、采购、日历与每日汇总里
+- **修复**：`app/ingredients/access.py` 统一 `visible_to` / `ensure_visible_ingredients`（不可见一律 404，不泄漏存在性），
+  `recipe_visible_to` 与 `_invisible_variants` 同理；所有「用户传 id 进来」的写入口都走它们。
+  名字规范化、按 id 取名字与单位也收到同一模块（原先 3~5 处各写一份）
+
 ### I13 — `entry.servings` = 配方倍数 ✅ 语义定案
 
 - **`entry.servings` = 做且吃的配方倍数**（`0.25` = 只做了 1/4 个配方）
@@ -571,8 +580,11 @@
 | 8 | ~~`location` / `notes` 未实现~~ | Week 5 | ✅ 2026-07-23 定案：`location` 已加，`notes` 不做 |
 | 9 | ~~Python 版本未锁定（`.python-version` 缺失 → 本地 3.14.5 / CI 3.12 长期漂移）~~ | Week 1 | ✅ 2026-08-13（DEP0） |
 | 10 | ~~`.env.example` 缺 4 个 config 项（CORS 一项 + Gemini 三项）~~ | Week 7、Week 10 | ✅ 2026-08-13（DEP8） |
-| 11 | `create_async_engine` 无 `connect_args`，接 Neon 需加 `statement_cache_size=0` | DEP3 | ⏳ Week 11 Step 2 |
-| 12 | 全仓 lint 欠账（CI 仅覆盖 shopping/ingredients/recipes/ai/meal_plans/tests） | Week 7+ | ⏳ 低 |
+| 11 | ~~`create_async_engine` 无 `connect_args`，接 Neon 需加 `statement_cache_size=0`~~ | DEP3 | ✅ Week 11 Step 2 |
+| 12 | ~~全仓 lint 欠账（CI 仅覆盖 shopping/ingredients/recipes/ai/meal_plans/tests）~~ | Week 7+ | ✅ 2026-09-24（DEP10：ruff 全仓清零 + 前端 eslint 0 error，均进 CI） |
+| 13 | 前端取数用「useEffect 里调 reload()」，React Compiler 规则 `set-state-in-effect` 报 12 处（已降为 warn） | 2026-09-24 | ⏳ 换 React Query / Suspense 取数时一并消除 |
+| 14 | 默认计划（Quick Log）无唯一约束，并发首请求可能建出两条 → 之后 `scalar_one_or_none` 报错 | 2026-09-24 审查 | ⏳ 需部分唯一索引迁移（先确认线上无重复） |
+| 15 | `alembic/env.py` 未复用 `_build_connect_args`；若迁移走 Neon pooled 地址会缺 SSL / statement cache 设置 | 2026-09-24 审查 | ⏳ 核实 release_command 实际用的 URL |
 | 13 | 缓存失效第二版：variant 营养变更 → 反查受影响天精准失效 | D-P2 | ⏳ 低（TTL 兜底中） |
 | 14 | ~~README 严重过期：写"Week 4 of 12"，技术栈误列 TypeScript / Celery / Claude API~~ | Week 1 | ✅ Week 11 Step 10 重写（成品定位，真实技术栈，删坏 badge） |
 | 15 | `VITE_API_URL` 缺失时静默退回 `http://127.0.0.1:8000`，生产构建应直接失败 | DEP4 | ⏳ 低（Step 6 已在 Cloudflare 配好该变量规避；代码层加固待后续迭代） |
@@ -920,6 +932,15 @@ Step 6 在 Cloudflare Pages 配置构建环境变量时需要这份清单，故�
 用的是 Fly 侧缓存的旧配置。**教训：部署配置文件必须进版本控制**，否则 CD 与本地配置漂移。
 
 ---
+
+### DEP10 — CI 质量门禁补齐：lint + 迁移校验 + 前端 ✅ 2026-09-24（第 1 批）
+
+- **问题**：CI 只跑后端测试 —— ruff 从未进 CI（全仓 84 个问题）；测试用 `create_all` 建表，**迁移链从没在 CI 里跑过**；前端没有任何检查
+- **后端 job 新增**：`uv sync --locked`（锁文件与 pyproject 不一致即失败）→ `ruff check .` → `alembic upgrade head` + `alembic check`
+  （迁移能从零跑到 head，且模型与迁移无漂移）→ 测试。迁移步骤与测试共用同一个 CI 库：测试会 drop_all 重建，互不影响（本地按同顺序验证过）
+- **前端 job 新增**：`npm ci` → `npm run lint` → `npm run build`；`deploy` 改为 `needs: [test, frontend]`
+- **ruff 豁免**：`alembic/versions/*` 豁免 E501 / I001 / F401 —— 已上线执行的迁移是历史记录，不为格式改它们（改了不会重跑，只制造 diff）
+- **eslint**：`set-state-in-effect` 降为 warn（见技术债 #13）；`src/components/ui/**` 关闭 `only-export-components`（shadcn 官方写法同时导出 variants）
 
 ## Week 11 部署收尾（2026-08-23）
 

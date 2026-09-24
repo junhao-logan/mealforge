@@ -833,3 +833,28 @@ Week 6 收尾（I6 / I11 / lint 清理）或直接进 Week 7（AI 菜谱生成�
 **关键决策**：I17（在途量在使用处扣，I7 保持纯粹；auto 行不并入；显示合并 + 结算关兄弟行）
 
 **里程碑**：最初 8 条迭代需求除 A7（缺描述）外全部完成
+
+
+---
+
+## Week 12 — 第 1 批：全仓代码审查 + 工程清理（2026-09-24）
+
+**完成**：
+- 三路并行代码审查 → 核实 → 修复；独立 agent 复核 diff 再修 3 个回归风险
+- 安全：写入口统一可见性（`app/ingredients/access.py`、`recipe_visible_to`、`_invisible_variants`）
+- 并发：entry 行锁；批次锁一条查询 + 固定顺序 + `populate_existing`
+- 精度：扣减需求量化 0.01；输入上限与 `resolve_quantity` 溢出拦截
+- 稳定：时区目录名不再 500、Redis 超时、营养目标变更失效全部汇总缓存、PATCH 可清空字段
+- 前端：菜谱详情 i18n、名字随接口返回、加餐 1+N → 1、列表 limit、弹窗重置、稳定 key、结算部分失败、`lib/meals.js`
+- CI：`uv sync --locked`、ruff、`alembic upgrade head` + `alembic check`、前端 lint + build，deploy 依赖两个门禁
+- 前后端 lint 清零；删除死代码 / 模板残留 / 已应用的 patch 文件
+- 测试 169 → **192**，覆盖率 83%
+
+**关键决策**：DEP10（CI 质量门禁）、I11 补充（写入口可见性）
+
+**踩坑**：
+- `ruff --fix` 会顺手改已上线的迁移文件 → 还原，并对 `alembic/versions` 豁免格式规则
+- React Compiler 的 `set-state-in-effect` 对「effect 里调 reload()」一律报错，await 之后再 setState 也不行 → 暂降 warn，记技术债
+- 往 JSX return 顶层塞注释会变成两个兄弟节点 → 注释挪到函数上方
+
+**下一步**：第 2 批 i18n 收尾
